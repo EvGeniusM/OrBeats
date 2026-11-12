@@ -1,3 +1,36 @@
+## 0.5401 — Opt-in vanilla subset, overbright lights, one-link chains, unreleased
+
+- New opt-in `--vanilla-subset` (with `--additive-install` only; default
+  behaviour unchanged: a mod-dependent pack is still refused whole). It keeps
+  the difficulties whose declared requirements are empty, for InfoV2 and
+  InfoV4 (`requirements` and `_requirements`), copies their charts byte for
+  byte and lists everything dropped, renamed or ignored. A mod-free `Lawless`
+  set is installed as `Standard` only when no Standard chart remains.
+  Malformed requirement declarations drop the difficulty; unknown custom data
+  still reaches the strict importer.
+- With the flag, the BeatSaver pack-level NE/ME/Chroma refusal is deferred to
+  that per-difficulty selection. The original content hash is still verified
+  on the complete download.
+- ScoreSaber identity: the hash is always the ORIGINAL pack's. No identity file
+  is published when charts were renamed, so a Lawless chart never borrows the
+  mod chart's Standard leaderboard. The selection report is stored in the
+  installed `map-info.json` and in the install result.
+- Light and strobe brightness accept authored overbright values up to 1000
+  (was 100) in both the V3 box path and the native V4 schema; one shared bound.
+  Brightness is a float multiplier, not an index. Appearance on PS4 unverified.
+- One-link chains (`sc`/`c` = 1, head only) pass through unchanged instead of
+  refusing the import. Behaviour on PS4 unverified.
+- One host audio-length limit (`additive_limits.py`) replaces six copies.
+  Default stays 600 s. `ORBEATS_DEV_MAX_AUDIO_SECONDS` (600..1800, development
+  tooling only, not exposed by the companion) exists for the long-audio
+  hardware experiment; 1800 s / 200 MB match the native library reader, which
+  rejects the whole library for an out-of-range entry.
+- `development/scripts/generate_long_test_song.py` creates synthetic 1–30 min
+  test songs (sparse or dense chart, Vorbis or PCM16, 44.1/48 kHz).
+- Host-verified on the real pack 475ef (735 s): default download refuses;
+  the subset imports five Lawless charts as Standard with the developer length
+  override. Not installed or played on a console. Plugin unchanged.
+
 ## 0.5400 — OrBeats branding cleanup
 
 - Identify pipeline BeatSaver API/download requests as `OrBeats-Pipeline`.

@@ -189,6 +189,17 @@ Easy/Normal/Hard10, Expert12, ExpertPlus16. Positive authored speed is unchanged
 missing jump offset is0. The importer reports default resolution. Mod-dependent
 charts remain unsupported; a mixed pack is not silently stripped of requirements.
 
+### Vanilla part of a mod-assisted pack (opt-in, pipeline 0.5401 / app 0.7.39)
+
+Discover shows “Vanilla part” when a pack mixes mod-dependent charts with
+mod-free ones. “Add vanilla part” (CLI: `--additive-install --vanilla-subset`)
+installs only the difficulties without declared requirements; charts are copied
+unchanged and the job log lists every chart left out. A mod-free `Lawless` set
+is listed as `Standard` when no Standard chart remains, and then has no
+ScoreSaber leaderboard. The entry is not the complete map: installing the
+complete map later creates a separate entry. Without the explicit choice the
+whole pack is refused as before. Host-tested only; see the hardware matrix.
+
 Capacity comes from the exact matched console plugin/protocol, not queue size.
 The read-only check on2026-10-26 found active0.8068 with a matching ELF hash and no
 `max_songs` field, so the companion preserves that profile's8-song cap. Local

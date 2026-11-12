@@ -35,6 +35,7 @@ class DeployOptions:
     """Typed options for one song deploy. Defaults = the example scripts'."""
 
     additive: bool = False      # Explicit in companion routes; legacy builder retained.
+    vanilla_subset: bool = False  # Opt-in, additive only: mod-free difficulties of a mod-assisted pack.
     map_id: str = ""            # BeatSaver map key (e.g. '1d6c7c2')
     target: str = ""            # slot name from beat_saber_song_ids.json
     # M13: local song-folder deploys (--song-dir) — the Beat Sage + local-
@@ -59,6 +60,8 @@ class DeployOptions:
         if not self.map_id and not self.song_dir:
             raise ValueError("Deploy needs a BeatSaver map ID or a local song "
                              "folder (Pick a Song tab) — nothing was picked.")
+        if self.vanilla_subset and not self.additive:
+            raise ValueError("Vanilla subset is available for additive installs only.")
         if not self.additive and not self.target:
             raise ValueError("Pick a target slot first (the stock song the "
                             "custom replaces).")
@@ -77,7 +80,8 @@ class DeployOptions:
             if self.audio!='pcm16' or self.pad_fsb5 or self.enable_modes or self.song_name or self.artist:
                 raise ValueError('Additive install supports original metadata, Standard maps and full PCM16 only.')
             source=['--song-dir',self.song_dir] if self.song_dir else ['--download-beat-saver-song',self.map_id]
-            return ['--additive-install',*source,'--config',str(paths.CONFIG_PATH)]
+            return ['--additive-install',*source,'--config',str(paths.CONFIG_PATH),
+                    *(['--vanilla-subset'] if self.vanilla_subset else [])]
         # M13: local folder wins over the BeatSaver download (the pipeline's
         # own precedence — see the class docstring)
         if self.song_dir:

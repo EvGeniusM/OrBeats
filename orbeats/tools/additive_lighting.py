@@ -21,6 +21,11 @@ REVIEWED_ENVIRONMENT = "WeaveEnvironment"
 # Owned PS4 2.04 catalog scene assets; no custom/downloading environment support.
 NATIVE_ENVIRONMENTS = frozenset(('BTSEnvironment', 'BigMirrorEnvironment', 'BillieEnvironment', 'BritneyEnvironment', 'ColliderEnvironment', 'CrabRaveEnvironment', 'DaftPunkEnvironment', 'DefaultEnvironment', 'Dragons2Environment', 'DragonsEnvironment', 'EDMEnvironment', 'FitBeatEnvironment', 'GagaEnvironment', 'GreenDayEnvironment', 'GreenDayGrenadeEnvironment', 'HalloweenEnvironment', 'HipHopEnvironment', 'InterscopeEnvironment', 'KDAEnvironment', 'KaleidoscopeEnvironment', 'LatticeEnvironment', 'LinkinPark2Environment', 'LinkinParkEnvironment', 'LizzoEnvironment', 'MetallicaEnvironment', 'Monstercat2Environment', 'MonstercatEnvironment', 'NiceEnvironment', 'OriginsEnvironment', 'Panic2Environment', 'PanicEnvironment', 'PyroEnvironment', 'QueenEnvironment', 'RockMixtapeEnvironment', 'RocketEnvironment', 'SkrillexEnvironment', 'TheRollingStonesEnvironment', 'TheSecondEnvironment', 'TheWeekndEnvironment', 'TimbalandEnvironment', 'TriangleEnvironment', 'WeaveEnvironment'))
 EASE_TYPES = frozenset((*range(-1, 31), 100, 101, 102))
+# Authored light/strobe brightness is a float multiplier, never an index. Real
+# vanilla V3 charts exceed the old reviewed 100 (observed 452.5), so the bound
+# is a sanity ceiling shared by the V3 box path and the native V4 schema. The
+# visual result of overbright values on PS4 is not hardware-verified.
+MAX_LIGHT_BRIGHTNESS = 1000
 # CUSA12878/2.04 BasicBeatmapEventType: additional environment lighting
 # channels 16..19 are ordinary basic events (e.g. Gaga). Deliberately exclude
 # legacy spawn rotations 14/15, unreviewed 20/21, specials 40..43, BPM 100 and
@@ -115,9 +120,9 @@ def validate_boxes(data, maxbeat):
                         {
                             "i": (0, 2, True),
                             "c": (-1, 2, True),
-                            "s": (0, 100, False),
+                            "s": (0, MAX_LIGHT_BRIGHTNESS, False),
                             "f": (0, 10000, True),
-                            "sb": (0, 100, False),
+                            "sb": (0, MAX_LIGHT_BRIGHTNESS, False),
                             "sf": (0, 10000, True),
                         }
                         if color

@@ -52,6 +52,8 @@ FILES = (
     "tools/additive_companion.py",
     "tools/score_source.py",
     "tools/additive_library.py",
+    "tools/additive_limits.py",
+    "tools/vanilla_subset.py",
     "tools/additive_legacy.py",
     "tools/additive_lighting.py",
     "tools/additive_modes.py",

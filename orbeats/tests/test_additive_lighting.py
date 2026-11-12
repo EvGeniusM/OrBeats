@@ -319,3 +319,18 @@ def test_conflicting_difficulty_environment_is_not_silently_collapsed(source, tm
     path.write_text(json.dumps(info))
     with pytest.raises(ValueError, match="mixed per-difficulty environments"):
         imp.import_song(source, tmp_path / "normal")
+
+
+@pytest.mark.parametrize("field", ["s", "sb"])
+def test_box_brightness_accepts_authored_overbright_with_one_shared_bound(field):
+    import additive_v4_native as native
+
+    data = chart()
+    event = data["lightColorEventBoxGroups"][0]["e"][0]["e"][0]
+    for good in (0, 100, 452.5, native.MAX_LIGHT_BRIGHTNESS):
+        event[field] = good
+        lighting.validate_boxes(data, 24)
+    for bad in (-0.001, native.MAX_LIGHT_BRIGHTNESS + 0.001, float("nan"), float("inf"), "1", True):
+        event[field] = bad
+        with pytest.raises(ValueError):
+            lighting.validate_boxes(data, 24)

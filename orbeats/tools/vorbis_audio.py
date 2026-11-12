@@ -13,6 +13,8 @@ import io
 import struct
 import zlib
 
+from additive_limits import max_audio_seconds
+
 MAX_BYTES = 200_000_000
 PROFILE = "vorbis-passthrough-preload-v1"
 PROFILE_48000 = "vorbis-passthrough-preload-48k-v1"
@@ -96,7 +98,7 @@ def parse_ogg(data, *, sample_rate=44100):
         or not setup.startswith(b"\x05vorbis")
     ):
         raise ValueError(f"compression requires Vorbis stereo {sample_rate} with 256/2048 blocks; keep PCM fallback")
-    if final_samples is None or not sample_rate <= final_samples <= 600 * sample_rate:
+    if final_samples is None or not sample_rate <= final_samples <= max_audio_seconds() * sample_rate:
         raise ValueError("Vorbis sample count outside supported duration")
     if any(not packet or packet[0] & 1 for packet in packets[3:]):
         raise ValueError("invalid Vorbis audio packet")
@@ -213,7 +215,7 @@ def reconstruct_ogg(fsb, *, sample_rate=44100):
         raise ValueError("compressed FSB format version mismatch")
     descriptor, chunk, crc, table_size = struct.unpack_from("<QIII", fsb, 60)
     frames = descriptor >> 34
-    if not sample_rate <= frames <= 600 * sample_rate or descriptor != 1 | (rate_code << 1) | (1 << 5) | (frames << 34):
+    if not sample_rate <= frames <= max_audio_seconds() * sample_rate or descriptor != 1 | (rate_code << 1) | (1 << 5) | (frames << 34):
         raise ValueError("compressed FSB sample descriptor mismatch")
     if table_size % 8 or not 8 <= table_size <= 8 * 601 or 80 + table_size > start:
         raise ValueError("compressed FSB seek bounds mismatch")

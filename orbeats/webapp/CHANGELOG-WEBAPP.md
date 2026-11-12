@@ -1,3 +1,16 @@
+## 0.7.39 — Explicit “Vanilla part” installs, unreleased
+
+- Discover labels a pack that has mod-dependent charts AND at least one
+  mod-free chart (including a mod-free Lawless copy) as “Vanilla part” instead
+  of “Not compatible”. Its button reads “Add vanilla part”, asks for
+  confirmation and sends an explicit per-map `vanilla_subset` flag. The plain
+  install path still refuses such packs; nothing is selected by default.
+- Vivify is now a recognised blocker (`vivify: true`); BeatSaver's `null` is
+  not treated as missing metadata.
+- The install queue keeps the choice per entry, including retry and the
+  paused-queue restore after a service update.
+- Requires pipeline 0.5401. Main plugin unchanged; no console deployment.
+
 ## 0.7.38 — OrBeats branding cleanup, unreleased
 
 - Rebrand BeatSaver/Beat Sage HTTP client identifiers, the local multipart

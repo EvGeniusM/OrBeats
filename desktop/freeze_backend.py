@@ -111,6 +111,8 @@ def main():
         "additive_companion",
         "score_source",
         "additive_library",
+        "additive_limits",
+        "vanilla_subset",
         "additive_lighting",
         "additive_modes",
         "additive_presentation",

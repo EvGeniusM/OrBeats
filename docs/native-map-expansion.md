@@ -76,9 +76,16 @@ rotation events have their own native preservation path.
 
 ## Deliberate remaining restrictions
 
-- No Chroma, Noodle Extensions, Mapping Extensions, Cinema, custom Unity
+- No Chroma, Noodle Extensions, Mapping Extensions, Cinema, Vivify, custom Unity
   environments or unknown runtime requirements. Do not silently strip their
   gameplay/visual behaviours.
+- Opt-in exception (pipeline 0.5401, `--vanilla-subset` / “Add vanilla part”):
+  when a pack ALSO contains difficulties with no declared requirements, only
+  those are installed, unchanged, and everything left out is listed. A mod-free
+  `Lawless` set becomes `Standard` only when no Standard chart remains; such an
+  entry gets no ScoreSaber identity. The subset and the complete map have
+  different level IDs, so installing the complete map later adds a second
+  entry. Never the default; the kept charts still pass the strict importer.
 - One environment per song. Distinct per-difficulty environments refuse.
 - One palette per difficulty rank within a song; conflicting palettes for the
   same difficulty across characteristics refuse instead of picking one silently.
@@ -86,7 +93,9 @@ rotation events have their own native preservation path.
   geometry beyond the validated vanilla bounds and no nonempty V2/V3 waypoints.
 - Native advanced difficulties share one verified sample/BPM timeline. Different
   per-difficulty BPM-region layouts refuse, even if the music file is shared.
-- Existing finite bounds remain: audio up to600seconds,64library entries and
+- Existing finite bounds remain: audio up to600seconds (the native reader
+  accepts1800; longer than600is unproven on PS4 memory and reachable only via
+  the developer variable `ORBEATS_DEV_MAX_AUDIO_SECONDS`),64library entries and
   131072manifest bytes, authored offset within±10seconds, validated per-array and
   aggregate object budgets. These are limits, not an unlimited-capacity claim.
 - Source/group availability, player colour/environment override precedence,

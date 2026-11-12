@@ -221,23 +221,33 @@ function compatibility(map) {
 	const diffs = map.versions?.[0]?.diffs;
 	if (!Array.isArray(diffs) || !diffs.length) return {status: "unknown", label: "Needs validation", reason: "Chart metadata is missing. The archive will be validated before installation."};
 	const reasons = new Set();
-	let incomplete = false;
+	let incomplete = false, vanilla = 0;
 	const mods = {ne: "Noodle Extensions", me: "Mapping Extensions", chroma: "Chroma", cinema: "Cinema"};
 	for (const d of diffs) {
 		if (!d || typeof d !== "object") { incomplete = true; continue; }
-		if (d.characteristic && !["Standard", "OneSaber", "NoArrows", "90Degree", "360Degree"].includes(d.characteristic)) reasons.add(`${d.characteristic} charts are unsupported`);
-		if (!d.characteristic || !["Easy", "Normal", "Hard", "Expert", "ExpertPlus"].includes(d.difficulty)) incomplete = true;
+		const blockers = new Set();
+		let partial = false;
+		if (d.characteristic && !["Standard", "OneSaber", "NoArrows", "90Degree", "360Degree"].includes(d.characteristic)) blockers.add(`${d.characteristic} charts are unsupported`);
+		if (!d.characteristic || !["Easy", "Normal", "Hard", "Expert", "ExpertPlus"].includes(d.difficulty)) partial = true;
 		for (const [key, label] of Object.entries(mods)) {
-			if (d[key] === true) reasons.add(label);
-			else if (d[key] !== false) incomplete = true;
+			if (d[key] === true) blockers.add(label);
+			else if (d[key] !== false) partial = true;
 		}
-		if (Array.isArray(d.requirements) && d.requirements.length) reasons.add("Declared mod requirements");
+		// BeatSaver reports vivify as true or null; only true is a blocker.
+		if (d.vivify === true) blockers.add("Vivify");
+		if (Array.isArray(d.requirements) && d.requirements.length) blockers.add("Declared mod requirements");
+		// A mod-free chart, counting a mod-free Lawless copy, can be offered alone.
+		if (!partial && blockers.size === (d.characteristic === "Lawless" ? 1 : 0)) vanilla++;
+		for (const blocker of blockers) reasons.add(blocker);
+		if (partial) incomplete = true;
 	}
+	// Never the default: the whole pack is still refused unless the vanilla part is requested explicitly.
+	if (reasons.size && vanilla) return {status: "subset", label: "Vanilla part", reason: [...reasons].join("; ") + `. ${vanilla} mod-free chart${vanilla === 1 ? "" : "s"} can be installed alone on request; the other charts are left out and nothing is edited. A Lawless set is listed as Standard when no Standard chart remains. The archive is validated before installation.`};
 	if (reasons.size) return {status: "unsupported", label: "Not compatible", reason: [...reasons].join("; ") + ". OrBeats refuses the whole pack rather than stripping unsupported charts/effects."};
 	return incomplete ? {status: "unknown", label: "Needs validation", reason: "Some compatibility flags are missing. The archive will be validated before installation."} : {status: "likely", label: "No known blockers", reason: "Metadata check only, not a compatibility guarantee. Chart format, geometry, lighting and audio are validated from the downloaded archive before installation."};
 }
 function compatibilityBadge(map) {
-	const c = compatibility(map), icon = c.status === "unsupported" ? "✕" : c.status === "likely" ? "✓" : "?";
+	const c = compatibility(map), icon = c.status === "unsupported" ? "✕" : c.status === "likely" ? "✓" : c.status === "subset" ? "◐" : "?";
 	return `<span class="compatibility compatibility-${c.status}" title="${escapeHTML(c.reason)}">${icon} ${c.label}</span>`;
 }
 function votes(stats) {
@@ -251,7 +261,7 @@ function rating(stats) {
 function card(map, index) {
 	const { meta, v, stats, title, artist, mapper, diffs } = mapData(map);
 	const c = compatibility(map);
-	return `<article class="card">${artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<h3 title="${escapeHTML(title)}">${escapeHTML(title)}</h3><p class="artist">${escapeHTML(artist)}</p><p class="mapper">Mapped by ${escapeHTML(mapper)}</p><div class="meta"><span>◷ ${duration(meta.duration)}</span><span>♫ ${number(meta.bpm)} BPM</span>${rating(stats)}</div><div class="diffs">${diffBadges(diffs)}</div>${compatibilityBadge(map)}<div class="meta"><span title="${escapeHTML(map.uploaded || v.createdAt || "Upload time unavailable")}">${relativeDate(map.uploaded || v.createdAt)}</span></div><div class="card-bottom"><button data-detail="${index}">View details</button><button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" title="${escapeHTML(c.reason)}">Add to queue ＋</button></div></article>`;
+	return `<article class="card">${artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<h3 title="${escapeHTML(title)}">${escapeHTML(title)}</h3><p class="artist">${escapeHTML(artist)}</p><p class="mapper">Mapped by ${escapeHTML(mapper)}</p><div class="meta"><span>◷ ${duration(meta.duration)}</span><span>♫ ${number(meta.bpm)} BPM</span>${rating(stats)}</div><div class="diffs">${diffBadges(diffs)}</div>${compatibilityBadge(map)}<div class="meta"><span title="${escapeHTML(map.uploaded || v.createdAt || "Upload time unavailable")}">${relativeDate(map.uploaded || v.createdAt)}</span></div><div class="card-bottom"><button data-detail="${index}">View details</button><button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" data-subset="${c.status === "subset"}" title="${escapeHTML(c.reason)}">${c.status === "subset" ? "Add vanilla part ＋" : "Add to queue ＋"}</button></div></article>`;
 }
 async function search(reset = true) {
 	if (reset) state.page = 0;
@@ -290,7 +300,7 @@ function showDetails(index, installedId = null) {
 	const bool = (v) => (v ? "Yes" : "No");
 	const c = compatibility(map);
 	$("detail-content").innerHTML =
-		`<div class="detail-top">${installedId ? installedArtwork(title, installedId) : artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<div><span class="eyebrow">BEATSAVER ${escapeHTML(map.id)}</span><h2>${escapeHTML(title)}</h2><p>${escapeHTML(artist)}<br>Mapped by ${escapeHTML(mapper)}</p><div class="diffs">${diffBadges(diffs)}</div>${installedId ? `<button class="danger" data-remove="${escapeHTML(installedId)}">Remove from PS4</button>` : `<button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" title="${escapeHTML(c.reason)}">Add to queue ＋</button>`}</div></div><div class="stats"><div><strong>${duration(meta.duration)}</strong><small>DURATION</small></div><div><strong>${number(meta.bpm)}</strong><small>BPM</small></div><div>${rating(stats)}<small>BEATSAVER SCORE</small></div><div><strong>${number(stats.upvotes)} / ${number(stats.downvotes)}</strong><small>UP / DOWN VOTES</small></div></div><p>${compatibilityBadge(map)}</p><p class="hint">${escapeHTML(c.reason)}</p><p title="${escapeHTML(map.uploaded || v.createdAt || "")}">Uploaded ${escapeHTML(relativeDate(map.uploaded || v.createdAt))}<br>Curated: ${bool(map.curatedAt)} · Ranked: ${bool(map.ranked || map.blRanked)} · Tags: ${escapeHTML((map.tags || []).join(", "))}</p><p class="description">${escapeHTML(map.description || "No mapper description supplied.")}</p><div class="table-wrap"><table><thead><tr><th>Chart</th><th>Notes / bombs / walls</th><th>NPS</th><th>NJS</th><th>Stars</th><th>Requirements</th></tr></thead><tbody>${diffs.map((d) => `<tr><td>${escapeHTML(d.characteristic)} ${escapeHTML(d.difficulty)}</td><td>${number(d.notes)} / ${number(d.bombs)} / ${number(d.obstacles)}</td><td>${number(d.nps)}</td><td>${number(d.njs)}</td><td>${number(d.stars || d.blStars)}</td><td>${escapeHTML([d.ne && "Noodle Extensions", d.me && "Mapping Extensions", d.chroma && "Chroma", d.cinema && "Cinema"].filter(Boolean).join(", ") || "Vanilla")}</td></tr>`).join("")}</tbody></table></div><p class="hint">Support: validated vanilla V2/V3/V4, arcs, chains, native V4 NJS/lighting, available stock environments, Standard, One Saber, No Arrows and 90°/360° characteristics. Expanded features require OrBeats 0.8075; hardware validation is pending. Mod-dependent effects remain unsupported. Unsupported formats and requirements are explicitly refused, not silently removed. Original maps are downloaded and converted in temporary storage, not kept as a local song library.</p><details><summary>Complete BeatSaver API data</summary><pre>${escapeHTML(JSON.stringify(map, null, 2))}</pre></details><p><a href="https://beatsaver.com/maps/${escapeHTML(map.id)}" target="_blank" rel="noopener noreferrer">Open on BeatSaver ↗</a></p>`;
+		`<div class="detail-top">${installedId ? installedArtwork(title, installedId) : artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<div><span class="eyebrow">BEATSAVER ${escapeHTML(map.id)}</span><h2>${escapeHTML(title)}</h2><p>${escapeHTML(artist)}<br>Mapped by ${escapeHTML(mapper)}</p><div class="diffs">${diffBadges(diffs)}</div>${installedId ? `<button class="danger" data-remove="${escapeHTML(installedId)}">Remove from PS4</button>` : `<button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" data-subset="${c.status === "subset"}" title="${escapeHTML(c.reason)}">${c.status === "subset" ? "Add vanilla part ＋" : "Add to queue ＋"}</button>`}</div></div><div class="stats"><div><strong>${duration(meta.duration)}</strong><small>DURATION</small></div><div><strong>${number(meta.bpm)}</strong><small>BPM</small></div><div>${rating(stats)}<small>BEATSAVER SCORE</small></div><div><strong>${number(stats.upvotes)} / ${number(stats.downvotes)}</strong><small>UP / DOWN VOTES</small></div></div><p>${compatibilityBadge(map)}</p><p class="hint">${escapeHTML(c.reason)}</p><p title="${escapeHTML(map.uploaded || v.createdAt || "")}">Uploaded ${escapeHTML(relativeDate(map.uploaded || v.createdAt))}<br>Curated: ${bool(map.curatedAt)} · Ranked: ${bool(map.ranked || map.blRanked)} · Tags: ${escapeHTML((map.tags || []).join(", "))}</p><p class="description">${escapeHTML(map.description || "No mapper description supplied.")}</p><div class="table-wrap"><table><thead><tr><th>Chart</th><th>Notes / bombs / walls</th><th>NPS</th><th>NJS</th><th>Stars</th><th>Requirements</th></tr></thead><tbody>${diffs.map((d) => `<tr><td>${escapeHTML(d.characteristic)} ${escapeHTML(d.difficulty)}</td><td>${number(d.notes)} / ${number(d.bombs)} / ${number(d.obstacles)}</td><td>${number(d.nps)}</td><td>${number(d.njs)}</td><td>${number(d.stars || d.blStars)}</td><td>${escapeHTML([d.ne && "Noodle Extensions", d.me && "Mapping Extensions", d.chroma && "Chroma", d.cinema && "Cinema"].filter(Boolean).join(", ") || "Vanilla")}</td></tr>`).join("")}</tbody></table></div><p class="hint">Support: validated vanilla V2/V3/V4, arcs, chains, native V4 NJS/lighting, available stock environments, Standard, One Saber, No Arrows and 90°/360° characteristics. Expanded features require OrBeats 0.8075; hardware validation is pending. Mod-dependent effects remain unsupported. Unsupported formats and requirements are explicitly refused, not silently removed. Original maps are downloaded and converted in temporary storage, not kept as a local song library.</p><details><summary>Complete BeatSaver API data</summary><pre>${escapeHTML(JSON.stringify(map, null, 2))}</pre></details><p><a href="https://beatsaver.com/maps/${escapeHTML(map.id)}" target="_blank" rel="noopener noreferrer">Open on BeatSaver ↗</a></p>`;
 	updateQueueButtons();
 	$("details").showModal();
 }
@@ -336,7 +346,7 @@ function updateQueueButtons() {
 	const queued = new Set([...state.queue.pending, ...(state.queue.active ? [state.queue.active] : [])].map(e => e.map_id));
 	for (const button of document.querySelectorAll("[data-install]")) {
 		button.disabled = button.dataset.unsupported === "true" || state.removing || queued.has(button.dataset.install) || state.adding.has(button.dataset.install);
-		button.textContent = queued.has(button.dataset.install) ? "Queued ✓" : button.dataset.unsupported === "true" ? "Not supported" : "Add to queue ＋";
+		button.textContent = queued.has(button.dataset.install) ? "Queued ✓" : button.dataset.unsupported === "true" ? "Not supported" : button.dataset.subset === "true" ? "Add vanilla part ＋" : "Add to queue ＋";
 	}
 	for (const button of document.querySelectorAll("[data-retry-map]")) {
 		const key = button.dataset.retryMap;
@@ -363,21 +373,24 @@ function renderQueue(queue) {
 	const signature = JSON.stringify([queue.pending, queue.history]);
 	if (state.queueSignature !== signature) {
 		state.queueSignature = signature;
-		$("queue-list").innerHTML = queue.pending.length ? queue.pending.map((entry, i) => `<li><span class="queue-number">${i + 1}</span><div><strong>${escapeHTML(entry.title)}</strong><small>BeatSaver ${escapeHTML(entry.map_id)} · Waiting</small></div><button data-queue-remove="${escapeHTML(entry.id)}" aria-label="Remove ${escapeHTML(entry.title)} from queue">×</button></li>`).join("") : '<li class="queue-empty">Your next beat starts in Discover.</li>';
+		$("queue-list").innerHTML = queue.pending.length ? queue.pending.map((entry, i) => `<li><span class="queue-number">${i + 1}</span><div><strong>${escapeHTML(entry.title)}</strong><small>BeatSaver ${escapeHTML(entry.map_id)}${entry.vanilla_subset === true ? " · Vanilla part" : ""} · Waiting</small></div><button data-queue-remove="${escapeHTML(entry.id)}" aria-label="Remove ${escapeHTML(entry.title)} from queue">×</button></li>`).join("") : '<li class="queue-empty">Your next beat starts in Discover.</li>';
 		$("queue-history").innerHTML = queue.history.length ? queue.history.map(entry => `<li><span class="queue-result ${escapeHTML(entry.status)}">${entry.status === "complete" ? "✓" : "!"}</span><div><strong>${escapeHTML(entry.title)}</strong><small>${escapeHTML(entry.status)}${entry.error ? ` · ${escapeHTML(entry.error)}` : ""}</small></div>${["failed", "cancelled"].includes(entry.status) ? `<button type="button" data-queue-retry="${escapeHTML(entry.id)}" data-retry-map="${escapeHTML(entry.map_id)}" aria-label="Retry ${escapeHTML(entry.title)}">Retry</button>` : ""}</li>`).join("") : '<li class="queue-empty">Completed installations will appear here.</li>';
 	}
 	updateQueueButtons();
 	updateLibraryControls();
 }
-async function install(key, retryTitle = null) {
+async function install(key, retryTitle = null, subset = false) {
 	if (state.removing) return;
 	if (state.adding.has(key) || state.queue.pending.some(e => e.map_id === key) || state.queue.active?.map_id === key) return;
+	const map = state.maps.find(m => m.id === key) || (state.selected?.id === key ? state.selected : null);
+	const check = map ? compatibility(map) : null;
+	// Explicit opt-in per map. A retry repeats the choice already confirmed for that queue entry.
+	if (subset && retryTitle === null && !(await confirmAction("Install only the vanilla part?", (check ? check.reason + " " : "") + "The installed entry is not the complete map and has no ScoreSaber leaderboard when a Lawless set is used.", "Add vanilla part"))) return;
 	state.adding.add(key);
 	updateQueueButtons();
 	try {
-		const map = state.maps.find(m => m.id === key) || (state.selected?.id === key ? state.selected : null);
-		if (map && compatibility(map).status === "unsupported") throw Error(compatibility(map).reason);
-		await api("/api/install-queue", { method: "POST", body: JSON.stringify({ map_id: key, title: retryTitle ?? (map ? mapData(map).title : key) }) });
+		if (check && (check.status === "unsupported" || (check.status === "subset" && !subset))) throw Error(check.reason);
+		await api("/api/install-queue", { method: "POST", body: JSON.stringify({ map_id: key, title: retryTitle ?? (map ? mapData(map).title : key), ...(subset ? { vanilla_subset: true } : {}) }) });
 		state.queueError = "";
 		renderQueue(await api("/api/install-queue"));
 	} catch (e) {
@@ -731,7 +744,7 @@ async function initialize() {
 			if (!b || (state.editingSelection && b.closest("#installed"))) return;
 			if (b.dataset.preview) await togglePreview(b);
 			if (b.dataset.detail !== undefined) showDetails(Number(b.dataset.detail));
-			if (b.dataset.install) await install(b.dataset.install);
+			if (b.dataset.install) await install(b.dataset.install, null, b.dataset.subset === "true");
 			if (b.dataset.queueRemove) await queueAction("remove", b.dataset.queueRemove);
 			if (b.dataset.remove) await removeMap(b.dataset.remove);
 			if (b.dataset.installedInfo !== undefined)
@@ -895,7 +908,7 @@ document.addEventListener("click", (event) => {
 	const button = event.target.closest("[data-queue-retry]");
 	if (!button || button.disabled) return;
 	const entry = state.queue.history.find(e => e.id === button.dataset.queueRetry);
-	if (entry && ["failed", "cancelled"].includes(entry.status)) install(entry.map_id, entry.title);
+	if (entry && ["failed", "cancelled"].includes(entry.status)) install(entry.map_id, entry.title, entry.vanilla_subset === true);
 });
 document.addEventListener(
 	"error",

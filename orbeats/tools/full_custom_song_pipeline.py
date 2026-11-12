@@ -5529,7 +5529,13 @@ Examples:
 
     parser.add_argument('--additive-install', action='store_true',
                         help='Append independent custom entry; closed game; no stock slot or plugin rebuild.')
+    parser.add_argument('--vanilla-subset', action='store_true',
+                        help='With --additive-install only: install just the mod-free difficulties of a '
+                             'mod-assisted pack (a Lawless set becomes Standard when no Standard remains). '
+                             'Charts are not edited; everything left out is listed.')
     args = parser.parse_args()
+    if args.vanilla_subset and not args.additive_install:
+        parser.error('--vanilla-subset requires --additive-install.')
     if args.additive_install:
         from additive_companion import install
         if args.target or args.pad_fsb5 or args.enable_modes or args.song_name or args.artist:
@@ -5538,7 +5544,8 @@ Examples:
             additive_config=json.load(file)
         if args.target_ip:additive_config['ps4']['ip']=args.target_ip
         try:
-            result=install(additive_config,map_id=args.download_beat_saver_song or '',song_dir=args.song_dir or '')
+            result=install(additive_config,map_id=args.download_beat_saver_song or '',song_dir=args.song_dir or '',
+                           **({'vanilla_subset':True} if args.vanilla_subset else {}))
         except ValueError as exc:
             print(f'[additive] Import refused: {exc}',file=sys.stderr,flush=True)
             raise SystemExit(2)

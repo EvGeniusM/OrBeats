@@ -906,7 +906,8 @@ def queue_status():
 def queue_add(body: dict):
     _require_config()
     try:
-        return INSTALL_QUEUE.add(body.get("map_id", ""), body.get("title", ""))
+        return INSTALL_QUEUE.add(body.get("map_id", ""), body.get("title", ""),
+                                 vanilla_subset=body.get("vanilla_subset", False))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

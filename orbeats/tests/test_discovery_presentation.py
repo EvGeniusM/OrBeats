@@ -25,7 +25,7 @@ if(compatibility(map([chart])).status!=='likely')throw Error('Expected vanilla m
 for(const flag of ['ne','me','chroma','cinema']){
  if(compatibility(map([{...chart,[flag]:true}])).status!=='unsupported')throw Error(flag);
 }
-if(compatibility(map([chart,{...chart,ne:true}])).status!=='unsupported')throw Error('Mixed pack must fail');
+if(compatibility(map([chart,{...chart,ne:true}])).status!=='subset')throw Error('Mixed pack is never a plain install');
 if(compatibility(map([{...chart,characteristic:'OneSaber'}])).status!=='likely')throw Error('OneSaber');
 if(compatibility(map([{...chart,characteristic:'360Degree'}])).status!=='likely')throw Error('Rotation');
 if(compatibility(map([{...chart,requirements:['Unknown mod']}])).status!=='unsupported')throw Error('Requirements');
@@ -52,6 +52,45 @@ console.log('metadata presentation verified');
 '''
     result = subprocess.run([node, "-e", program, json.dumps(helpers)], text=True, capture_output=True, check=True)
     assert "metadata presentation verified" in result.stdout
+
+
+def test_vanilla_part_is_offered_only_as_an_explicit_choice():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required for executable UI checks")
+    source = (ROOT / "webapp/static/companion.js").read_text(encoding="utf-8")
+    helpers = "const escapeHTML=(v)=>String(v);" + source[source.index("function compatibility(map)"):source.index("function votes(")]
+    program = r'''
+const vm=require('vm');const ctx=vm.createContext({});vm.runInContext(JSON.parse(process.argv[1]),ctx);
+vm.runInContext(`
+const chart={characteristic:'Standard',difficulty:'Expert',ne:false,me:false,chroma:false,cinema:false};
+const map=(diffs)=>({versions:[{diffs}]});
+const mod={...chart,chroma:true,vivify:true}, lawless={...chart,characteristic:'Lawless',vivify:null};
+const status=(diffs)=>compatibility(map(diffs)).status;
+if(status([{...chart,vivify:null}])!=='likely')throw Error('Null vivify is not missing metadata');
+if(status([{...chart,vivify:true}])!=='unsupported')throw Error('Vivify alone must block');
+if(status([mod,{...mod,characteristic:'NoArrows'}])!=='unsupported')throw Error('All-mod pack');
+const mixed=compatibility(map([mod,{...mod,characteristic:'NoArrows'},lawless,{...lawless,difficulty:'Easy'}]));
+if(mixed.status!=='subset'||mixed.label!=='Vanilla part')throw Error('Lawless copy beside mod charts');
+if(!mixed.reason.includes('Vivify')||!mixed.reason.includes('2 mod-free charts')||!mixed.reason.includes('on request'))throw Error('Reason');
+if(status([lawless])!=='subset')throw Error('Lawless-only pack needs the explicit choice');
+if(status([mod,chart])!=='subset')throw Error('Vanilla Standard beside mod chart');
+if(status([mod,{...chart,characteristic:'Lightshow'}])!=='unsupported')throw Error('Lightshow is not playable');
+if(status([mod,{...lawless,ne:true}])!=='unsupported')throw Error('Mod Lawless is not vanilla');
+if(status([mod,{...lawless,requirements:['Chroma']}])!=='unsupported')throw Error('Lawless requirements');
+if(status([mod,{...lawless,difficulty:'Extreme'}])!=='unsupported')throw Error('Unknown difficulty');
+if(status([mod,{...chart,ne:undefined}])!=='unsupported')throw Error('Incomplete flags are not vanilla');
+if(status([lawless,null])!=='subset')throw Error('Malformed sibling');
+if(!compatibilityBadge(map([mod,lawless])).includes('compatibility-subset'))throw Error('Badge');
+`,ctx);
+console.log('vanilla part verified');
+'''
+    result = subprocess.run([node, "-e", program, json.dumps(helpers)], text=True, capture_output=True, check=True, encoding="utf-8")
+    assert "vanilla part verified" in result.stdout
+    # The plain button never installs a partial pack; the request carries an explicit flag.
+    assert 'check.status === "subset" && !subset' in source
+    assert "...(subset ? { vanilla_subset: true } : {})" in source
+    assert 'data-subset="${c.status === "subset"}"' in source
 
 
 def test_no_placeholder_play_download_metrics_or_default_checkboxes():

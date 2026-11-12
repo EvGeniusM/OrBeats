@@ -66,6 +66,8 @@ class InstallQueue:
                 "title": str(entry.get("title", ""))[:200],
                 "status": entry["status"],
             }
+            if entry.get("vanilla_subset") is True:
+                result["vanilla_subset"] = True
             if not waiting:
                 for key in ("job_id", "exit_code", "error"):
                     if key in entry:
@@ -88,10 +90,12 @@ class InstallQueue:
         with self._lock:
             return bool(self._pending or self._active)
 
-    def add(self, map_id, title=""):
+    def add(self, map_id, title="", vanilla_subset=False):
         key = str(map_id).strip().lower()
         if not re.fullmatch(r"[0-9a-f]{1,12}", key):
             raise ValueError("A valid BeatSaver map key is required.")
+        if type(vanilla_subset) is not bool:
+            raise ValueError("vanilla_subset must be true or false.")
         with self._lock:
             if any(e["map_id"] == key for e in self._pending + ([self._active] if self._active else [])):
                 raise ValueError("This map is already queued or installing.")
@@ -103,6 +107,8 @@ class InstallQueue:
                 "title": str(title).strip()[:200] or "Map " + key,
                 "status": "queued",
             }
+            if vanilla_subset:
+                entry["vanilla_subset"] = True  # explicit per-map opt-in
             self._pending.append(entry)
             return dict(entry)
 
@@ -152,7 +158,9 @@ class InstallQueue:
                     return
                 entry = self._pending[0]
                 try:
-                    argv = deploy.DeployOptions(additive=True, map_id=entry["map_id"]).build_argv()
+                    argv = deploy.DeployOptions(
+                        additive=True, map_id=entry["map_id"], vanilla_subset=entry.get("vanilla_subset") is True
+                    ).build_argv()
                     job = self.runner.start(argv, label="Install " + entry["title"])
                 except Exception as exc:
                     self._error = True

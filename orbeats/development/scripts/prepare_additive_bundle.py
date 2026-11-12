@@ -22,7 +22,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 DIFFICULTIES = {'Easy': 0, 'Normal': 1, 'Hard': 2, 'Expert': 3, 'ExpertPlus': 4}
-MAX_AUDIO_SECONDS = 600
+from additive_limits import max_audio_seconds  # noqa: E402 -- tools path set above
 
 
 def canonical(value):
@@ -139,7 +139,7 @@ def load_song(folder):
         if (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getcomptype()) != (2, 2, 44100, 'NONE'):
             raise ValueError('prototype requires PCM16 WAV 44.1kHz stereo')
         samples = w.getnframes()
-        if not 44100 <= samples <= MAX_AUDIO_SECONDS * 44100:
+        if not 44100 <= samples <= max_audio_seconds() * 44100:
             raise ValueError('audio duration outside prototype bounds')
         pcm = w.readframes(samples)
     if len(pcm) != samples * 4:
@@ -523,7 +523,7 @@ def validate(folder, expected_song=None):
     if type(rate) is not int or rate not in ((44100, 48000) if codec == 'vorbis' else (44100,)):
         raise ValueError('unsupported audio sample rate')
     frames = manifest['pcm_frames']
-    if type(frames) is not int or not rate <= frames <= MAX_AUDIO_SECONDS * rate:
+    if type(frames) is not int or not rate <= frames <= max_audio_seconds() * rate:
         raise ValueError('invalid audio frame count')
     if abs(manifest['duration_seconds'] - frames / rate) > 1e-8:
         raise ValueError('audio duration/frame metadata mismatch')

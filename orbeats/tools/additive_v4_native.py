@@ -9,7 +9,8 @@ from __future__ import annotations
 import copy
 import math
 
-from additive_lighting import BASIC_LIGHT_EVENT_TYPES, EASE_TYPES, is_basic_light_event_type
+from additive_limits import max_audio_seconds
+from additive_lighting import BASIC_LIGHT_EVENT_TYPES, EASE_TYPES, MAX_LIGHT_BRIGHTNESS, is_basic_light_event_type
 
 
 def number(v, name, lo=0, hi=1000000, integer=False):
@@ -50,7 +51,7 @@ def audio(data):
     if not isinstance(checksum, str) or len(checksum) > 128 or any(ord(c) < 32 for c in checksum):
         raise ValueError("invalid native AudioData checksum")
     rate = number(data.get("songFrequency"), "sample rate", 1, 192000, True)
-    count = number(data.get("songSampleCount"), "sample count", rate, rate * 600, True)
+    count = number(data.get("songSampleCount"), "sample count", rate, rate * max_audio_seconds(), True)
     last_sample, last_beat = 0, 0
     regions = rows(data.get("bpmData"), "BPM regions", 10000)
     if not regions:
@@ -115,7 +116,9 @@ def chart(data, maxbeat, base_njs=10):
             "h": (1, 5, True),
         },
         "arcsData": {"m": (0, 100, False), "tm": (0, 100, False), "a": (0, 2, True)},
-        "chainsData": {"tx": (0, 3, True), "ty": (0, 2, True), "c": (2, 128, True), "s": (0.001, 100, False)},
+        # c counts the head: an authored one-link chain (c=1) is head-only and is
+        # passed through unchanged, adding no slices. Not hardware-verified.
+        "chainsData": {"tx": (0, 3, True), "ty": (0, 2, True), "c": (1, 128, True), "s": (0.001, 100, False)},
         "njsEventData": {"d": (-100, 100, False), "p": (0, 1, True), "e": (-1, 102, True)},
     }
     event_keys = ("colorNotes", "bombNotes", "obstacles", "arcs", "chains", "njsEvents")
@@ -204,9 +207,9 @@ def lighting(data, maxbeat):
             "p": (0, 1, True),
             "e": ease,
             "c": (-1, 2, True),
-            "b": (0, 100, False),
+            "b": (0, MAX_LIGHT_BRIGHTNESS, False),  # brightness, not a beat
             "f": (0, 10000, True),
-            "sb": (0, 100, False),
+            "sb": (0, MAX_LIGHT_BRIGHTNESS, False),
             "sf": (0, 10000, True),
         },
         "lightRotationEvents": {

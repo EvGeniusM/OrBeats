@@ -69,7 +69,9 @@ def tempo_events(data):
         raise ValueError("unsupported V4 AudioData checksum/LUFS or version")
     samples = data["songSampleCount"]
     rate = data["songFrequency"]
-    if type(samples) is not int or type(rate) is not int or not 1 <= rate <= 192000 or not 1 <= samples <= rate * 600:
+    from additive_limits import max_audio_seconds
+
+    if type(samples) is not int or type(rate) is not int or not 1 <= rate <= 192000 or not 1 <= samples <= rate * max_audio_seconds():
         raise ValueError("invalid V4 audio sample bounds")
     regions = data.get("bpmData")
     if not isinstance(regions, list) or not 1 <= len(regions) <= 10000:

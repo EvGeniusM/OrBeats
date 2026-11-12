@@ -162,7 +162,7 @@ def commit_library(ftp, songs, expected, run, backup_dir):
     return content
 
 
-def download(map_id, destination):
+def download(map_id, destination, vanilla_subset=False):
     match = re.fullmatch(r"(?:https://beatsaver\.com/maps/)?([0-9a-fA-F]{1,12})/?", map_id)
     if not match:
         raise ValueError("BeatSaver map key or https://beatsaver.com/maps/<key> required")
@@ -183,7 +183,9 @@ def download(map_id, destination):
     if not versions:
         raise ValueError("BeatSaver map has no version")
     version = versions[0]
-    for d in version.get("diffs", []):
+    # Opt-in vanilla subset: the pack-level refusal is deferred to the per-
+    # difficulty selection and the unchanged strict importer. Default: refuse.
+    for d in [] if vanilla_subset else version.get("diffs", []):
         if d.get("ne") or d.get("me") or d.get("chroma"):
             raise ValueError("Map requires unsupported extensions: " + ", ".join(
                 label for key, label in (("ne", "Noodle Extensions"), ("me", "Mapping Extensions"), ("chroma", "Chroma")) if d.get(key)
@@ -231,7 +233,41 @@ def download(map_id, destination):
     return folder
 
 
-def install(config, map_id="", song_dir="", report_dir=None):
+def select_vanilla_subset(source, destination):
+    """Opt-in only. Returns (import source, report).
+
+    A pack that is already fully vanilla is returned unchanged, so its level ID
+    and leaderboard identity match a normal installation.
+    """
+    import vanilla_subset
+
+    source = Path(source)
+    report = vanilla_subset.apply(source, destination)
+    if not report["changed"]:
+        print("[additive] Vanilla subset requested; the pack needs no changes.", flush=True)
+        return source, report
+    destination = Path(destination).resolve()
+    for item in report["dropped"]:
+        print("[additive] Not installed: " + item, flush=True)
+    for item in report["renamed"]:
+        print("[additive] Installed under another characteristic: " + item, flush=True)
+    for item in report["stripped"]:
+        print("[additive] Ignored descriptive metadata: " + item, flush=True)
+    if not report["score_identity"]:
+        print("[additive] No leaderboard identity is stored for renamed charts.", flush=True)
+    metadata = destination / vanilla_subset.METADATA
+    if metadata.is_file():
+        try:
+            data = json.loads(metadata.read_text(encoding="utf8"))
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            data["orbeats_vanilla_subset"] = {k: report[k] for k in ("kept", "dropped", "renamed", "stripped")}
+            metadata.write_text(json.dumps(data), encoding="utf8")
+    return destination, report
+
+
+def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=False):
     if config.get("title", {}).get("id") != "CUSA12878":
         raise ValueError("only CUSA12878 2.04 supported")
     address = config["ps4"]
@@ -285,7 +321,16 @@ def install(config, map_id="", song_dir="", report_dir=None):
             template_seed = checked_bundle(ftp, songs[0])
         with tempfile.TemporaryDirectory(prefix="bsd-additive-") as tmp:
             tmp = Path(tmp)
-            source = Path(song_dir).resolve() if song_dir else download(map_id, tmp / "download")
+            source = Path(song_dir).resolve() if song_dir else download(map_id, tmp / "download", vanilla_subset)
+            # Leaderboard identity is the ORIGINAL pack's hash, and only when no
+            # chart was renamed; a subset never invents or borrows an identity.
+            identity_source, subset_report, publish_identity = None, None, True
+            if vanilla_subset:
+                print("[additive] Selecting the vanilla-playable part of this pack...", flush=True)
+                original = source
+                source, subset_report = select_vanilla_subset(original, tmp / "vanilla-subset")
+                if subset_report["changed"]:
+                    identity_source, publish_identity = original, subset_report["score_identity"]
             importer = helper("import_v3_additive.py")
             prepare = helper("prepare_additive_bundle.py")
             media = helper("prepare_additive_media.py")
@@ -363,7 +408,7 @@ def install(config, map_id="", song_dir="", report_dir=None):
             # Decode rounds floats exactly as the native reader; canonical equality.
             song = decode(encode([song]))[0]
             import score_source
-            source_sha1 = score_source.original_hash(source, helper("import_v4_additive.py").references, prepare.local_file)
+            source_sha1 = score_source.original_hash(source if identity_source is None else identity_source, helper("import_v4_additive.py").references, prepare.local_file)
             # Compression has its own immutable ID; reimport must not create a
             # duplicate or replace an existing PCM entry for identical input.
             same = next((s for s in songs if s["id"] == song["id"]), None)
@@ -375,7 +420,8 @@ def install(config, map_id="", song_dir="", report_dir=None):
                 print(
                     "[additive] Song already listed; initializing library if needed, without duplication or repair.", flush=True
                 )
-                score_source.publish(ftp, __import__(__name__), same, source_sha1, run)
+                if publish_identity:
+                    score_source.publish(ftp, __import__(__name__), same, source_sha1, run)
                 if old is None:
                     commit_library(ftp, songs, old, run, report_dir)
                 return {
@@ -428,7 +474,8 @@ def install(config, map_id="", song_dir="", report_dir=None):
                     staged = stage(ftp, path, raw, run)
                     closed(ftp)
                     ftp.rename(staged, path)
-            score_source.publish(ftp, __import__(__name__), song, source_sha1, run)
+            if publish_identity:
+                score_source.publish(ftp, __import__(__name__), song, source_sha1, run)
             closed(ftp)
             # Existing immutable descriptors are retained; manifest CAS protects concurrent edits.
             # Only new files need full content verification during an append.
@@ -445,6 +492,9 @@ def install(config, map_id="", song_dir="", report_dir=None):
                 "plugin_changed": False,
                 "limitations": "Validated vanilla V2/V3/V4, native arcs/chains/NJS and lighting, stock environments and supported characteristics; runtime extensions require OrBeats 0.8075. Mod-required effects are refused, not stripped.",
             }
+            if subset_report and subset_report["changed"]:
+                result["vanilla_subset"] = subset_report
+                result["limitations"] += " Vanilla subset was requested: only the listed mod-free charts were installed, unchanged; mod-dependent charts were left out."
             (report_dir / ("install-" + run + ".json")).write_text(json.dumps(result, indent=2) + "\n")
             return result
     finally:

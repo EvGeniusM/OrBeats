@@ -16,6 +16,10 @@ Do not silently replace or remove existing entries to create a test fixture.
 | OneSaber/NoArrows/mixed modes | Genuine characteristic resolution and atomic refusal tested with managed fixtures | Mode selector, actual chart selection, counters and gameplay |
 |90/360rotation | Native V3 preservation and bounded V2 enum conversion fixtures | Headset/play-area alignment, obstacle orientation, same-beat early/late ordering; user controls safe play space |
 | Offsets/LUFS/separate preview | Wire/bundle/resampling and no-stock-write fixtures | Preview versus song audio, timing and loudness, player overrides, Practice seek |
+| Vanilla part of a mod pack (475ef, Lawless as Standard) | Host only: subset selection and strict import of five charts pass with the developer length override | Install, mode/difficulty list, playback; no ScoreSaber panel data expected |
+| Overbright light brightness (>100, up to452.5 in 475ef) | Schema bound raised to1000; host fixtures | Visual result: bloom/white-out versus PC reference |
+| One-link chains (`sc`=1) | Passed through unchanged; host fixtures | No crash on spawn; appearance and scoring of the head note |
+| Audio longer than600s | Host limit is one constant; native reader accepts1800s/200MB; generator for8–15min songs | Staged experiment in `docs/plans/2026-11-12-modded-maps-and-long-audio.md` section6: load, pause, Practice seek, full play, second start |
 | Stock regressions | Repository preservation and palette no-stock-write tests | One stock song before/after a custom song; controls/UI/audio/colours unchanged |
 
 Known unimplemented cases remain explicit: runtime mods/custom Unity environments,

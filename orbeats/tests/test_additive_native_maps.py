@@ -646,3 +646,30 @@ def test_zero_duration_v3_chains_convert_losslessly_without_epsilon_or_dropped_s
     assert out['chains'][0]['hb'] == out['chains'][0]['tb'] == 1
     assert out['chainsData'][0] == dict(tx=1, ty=1, c=5, s=1)
     assert native.chart(out, 2, 12) == 5 and data == before
+
+
+def test_single_link_v3_chain_reaches_native_unchanged_and_adds_no_slices():
+    # Authored one-link chains (sc=1) are head-only. They are passed through,
+    # never converted or dropped; zero links and oversize counts still refuse.
+    data = {'version': '3.3.0', 'colorNotes': [{'b': 1, 'x': 1, 'y': 0, 'c': 0, 'd': 1}],
+            'burstSliders': [{'b': 1, 'tb': 1.5, 'c': 0, 'x': 1, 'y': 0, 'd': 1,
+                              'tx': 1, 'ty': 1, 'sc': 1, 's': 1}]}
+    before = copy.deepcopy(data)
+    out, _ = v3native.convert(data, audio(), 12)
+    assert out['chainsData'][0] == dict(tx=1, ty=1, c=1, s=1)
+    assert native.chart(out, 2, 12) == 1 and data == before  # head only, no extra slices
+    for bad in (0, -1, 129, 1.0, True):
+        broken = copy.deepcopy(out); broken['chainsData'][0]['c'] = bad
+        with pytest.raises(ValueError): native.chart(broken, 2, 12)
+
+
+@pytest.mark.parametrize('field', ['b', 'sb'])
+def test_native_light_brightness_accepts_authored_overbright_but_stays_bounded(field):
+    light = lights()
+    for good in (0, 100, 452.5, native.MAX_LIGHT_BRIGHTNESS):
+        light['lightColorEvents'][0][field] = good
+        assert native.lighting(light, 2)
+    for bad in (-0.001, native.MAX_LIGHT_BRIGHTNESS + 0.001, float('nan'), float('inf'), '1', True):
+        light['lightColorEvents'][0][field] = bad
+        with pytest.raises(ValueError): native.lighting(light, 2)
+    assert native.MAX_LIGHT_BRIGHTNESS == 1000
