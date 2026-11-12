@@ -109,6 +109,7 @@ def main():
         "goldhen_config",
         "console_transaction",
         "additive_companion",
+        "additive_chroma",
         "score_source",
         "additive_library",
         "additive_limits",

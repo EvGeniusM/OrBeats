@@ -162,7 +162,7 @@ def commit_library(ftp, songs, expected, run, backup_dir):
     return content
 
 
-def download(map_id, destination, vanilla_subset=False):
+def download(map_id, destination, vanilla_subset=False, chroma=False):
     match = re.fullmatch(r"(?:https://beatsaver\.com/maps/)?([0-9a-fA-F]{1,12})/?", map_id)
     if not match:
         raise ValueError("BeatSaver map key or https://beatsaver.com/maps/<key> required")
@@ -186,10 +186,12 @@ def download(map_id, destination, vanilla_subset=False):
     # Opt-in vanilla subset: the pack-level refusal is deferred to the per-
     # difficulty selection and the unchanged strict importer. Default: refuse.
     for d in [] if vanilla_subset else version.get("diffs", []):
-        if d.get("ne") or d.get("me") or d.get("chroma"):
-            raise ValueError("Map requires unsupported extensions: " + ", ".join(
-                label for key, label in (("ne", "Noodle Extensions"), ("me", "Mapping Extensions"), ("chroma", "Chroma")) if d.get(key)
-            ) + " in " + str(d.get("difficulty", "unknown difficulty")) + ". Mod-dependent maps cannot be installed safely.")
+        # Level-1 Chroma is decided later by the importer from the keys actually used; the
+        # flag alone no longer refuses a map when the plugin declared ORB_CHROMA_V1.
+        blocked = [label for key, label in (("ne", "Noodle Extensions"), ("me", "Mapping Extensions"), ("chroma", "Chroma"))
+                   if d.get(key) and not (key == "chroma" and chroma)]
+        if blocked:
+            raise ValueError("Map requires unsupported extensions: " + ", ".join(blocked) + " in " + str(d.get("difficulty", "unknown difficulty")) + ". Mod-dependent maps cannot be installed safely.")
     url = version["downloadURL"]
     u = urllib.parse.urlparse(url)
     if u.scheme != "https" or not u.hostname or not u.hostname.endswith(".beatsaver.com"):
@@ -321,7 +323,7 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
             template_seed = checked_bundle(ftp, songs[0])
         with tempfile.TemporaryDirectory(prefix="bsd-additive-") as tmp:
             tmp = Path(tmp)
-            source = Path(song_dir).resolve() if song_dir else download(map_id, tmp / "download", vanilla_subset)
+            source = Path(song_dir).resolve() if song_dir else download(map_id, tmp / "download", vanilla_subset, chroma=cap.get("chroma") in (1, 2, 3))
             # Leaderboard identity is the ORIGINAL pack's hash, and only when no
             # chart was renamed; a subset never invents or borrows an identity.
             identity_source, subset_report, publish_identity = None, None, True
@@ -346,7 +348,9 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
                 source = v4_source
             print("[additive] Validating and converting map/audio...", flush=True)
             normalized = tmp / "normalized"
-            import_report = importer.import_song(source, normalized)
+            # Chroma data is extracted only up to the level the active plugin declared:
+            # 1 = colours (ORB_CHROMA_V1), 2 = + rings and lasers (ORB_CHROMA_V2), 3 = + light gradients (ORB_CHROMA_V3).
+            import_report = importer.import_song(source, normalized, **({"chroma": cap["chroma"]} if cap.get("chroma") in (1, 2, 3) else {}))
             for difficulty, count in import_report.get("ignored_v2_wall_placeholders", {}).items():
                 print(f"[additive] Ignored {count} all-zero legacy wall placeholders in {difficulty}; playable walls retained.", flush=True)
             for difficulty, speed in import_report.get("default_njs", {}).items():
@@ -407,7 +411,9 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
             song = descriptor(manifest, *blobs, m["preview_duration_seconds"])
             # Decode rounds floats exactly as the native reader; canonical equality.
             song = decode(encode([song]))[0]
+            import additive_chroma
             import score_source
+            chroma_charts = import_report.get("chroma_charts")
             source_sha1 = score_source.original_hash(source if identity_source is None else identity_source, helper("import_v4_additive.py").references, prepare.local_file)
             # Compression has its own immutable ID; reimport must not create a
             # duplicate or replace an existing PCM entry for identical input.
@@ -422,6 +428,10 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
                 )
                 if publish_identity:
                     score_source.publish(ftp, __import__(__name__), same, source_sha1, run)
+                if chroma_charts:
+                    additive_chroma.publish(
+                        ftp, __import__(__name__), same["id"], additive_chroma.encode(same["id"], chroma_charts), run
+                    )
                 if old is None:
                     commit_library(ftp, songs, old, run, report_dir)
                 return {
@@ -476,11 +486,21 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
                     ftp.rename(staged, path)
             if publish_identity:
                 score_source.publish(ftp, __import__(__name__), song, source_sha1, run)
+            chroma_bytes, chroma_created = None, False
+            if chroma_charts:
+                chroma_bytes = additive_chroma.encode(song["id"], chroma_charts)
+                chroma_created = additive_chroma.publish(ftp, __import__(__name__), song["id"], chroma_bytes, run)
             closed(ftp)
             # Existing immutable descriptors are retained; manifest CAS protects concurrent edits.
             # Only new files need full content verification during an append.
             print("[additive] Publishing library last; restart Beat Saber after completion.", flush=True)
-            commit_library(ftp, candidate, old, run, report_dir)
+            try:
+                commit_library(ftp, candidate, old, run, report_dir)
+            except Exception:
+                if chroma_created:
+                    # The sidecar belongs to a song that never became visible: leave nothing behind.
+                    additive_chroma.discard(ftp, __import__(__name__), song["id"], chroma_bytes)
+                raise
             result = {
                 "ok": True,
                 "already_present": False,

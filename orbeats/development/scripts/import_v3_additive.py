@@ -141,7 +141,7 @@ def convert_map(data, bpm):
     return out
 
 
-def cosmetic_only(custom, allowed):
+def cosmetic_only(custom, allowed, chroma_ok=False):
     empty_lists = {'_requirements', '_suggestions', '_warnings', '_information'}
     empty_strings = {'_customEnvironment', '_customEnvironmentHash'}
     offsets = {'_editorOffset', '_editorOldOffset'}
@@ -156,6 +156,9 @@ def cosmetic_only(custom, allowed):
             continue
         if key in empty_lists and value == []:
             continue
+        if (chroma_ok and key in ('_requirements', '_suggestions') and isinstance(value, list) and value
+                and all(item == 'Chroma' for item in value)):
+            continue  # level-1 Chroma colors only; the caller proved every key is supported
         if key in empty_strings and value == '':
             continue
         if key in offsets and type(value) in (int, float) and math.isfinite(value):
@@ -163,7 +166,7 @@ def cosmetic_only(custom, allowed):
         raise ValueError('unsupported requirements/custom metadata: ' + key)
 
 
-def import_song(source, output, ffmpeg='ffmpeg'):
+def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists() or output.is_relative_to(source):
         raise ValueError('new output outside source required')
@@ -187,6 +190,25 @@ def import_song(source, output, ffmpeg='ffmpeg'):
         validate_audio(native_audio)
         info['_orbeatsAudioData'] = 'native-audio.dat'
     from additive_lighting import has_boxes
+    # chroma: False, or the Chroma level the active plugin declared (True = 1, the
+    # 0.8080 interface): 1 = colours (ORB_CHROMA_V1), 2 = + rings/lasers (ORB_CHROMA_V2),
+    # 3 = + light gradients (ORB_CHROMA_V3).
+    level = chroma if chroma in (2, 3) else 1
+    chroma_ok = False
+    if chroma:
+        # A Chroma requirement is honored only when every installed chart uses
+        # nothing beyond the supported level-1 colors.
+        import additive_chroma
+        chroma_ok = True
+        for group in original.get('_difficultyBeatmapSets', []):
+            for diff in group.get('_difficultyBeatmaps', []):
+                probe = json.loads(prepare.local_file(source, diff['_beatmapFilename']).read_text(encoding='utf-8-sig'))
+                if not (str(probe.get('_version', '')).startswith('2.') or str(probe.get('version', '')).startswith('3.')):
+                    chroma_ok = False
+                    continue
+                keys = additive_chroma.unsupported_keys(probe, level)
+                if keys:
+                    raise ValueError(f"{diff['_beatmapFilename']}: unsupported Chroma/custom data: " + ', '.join(keys))
     force_native_v3 = False
     preserve_v3 = False
     for group in original.get('_difficultyBeatmapSets', []):
@@ -204,18 +226,27 @@ def import_song(source, output, ffmpeg='ffmpeg'):
         seen, tempos, skipped, default_njs = set(), {}, [], {}
         active_environments = {}
         ignored_placeholders = {}
-        from additive_modes import key as map_key
+        chroma_charts = []
+        from additive_modes import key as map_key, MODES, DIFFS
         for g in original.get('_difficultyBeatmapSets', []):
             mode = g.get('_beatmapCharacteristicName')
             map_key(mode, 'Easy')
             ds = []
             for d in g.get('_difficultyBeatmaps', []):
-                cosmetic_only(d.get('_customData', {}), {'_difficultyLabel', '_colorLeft', '_colorRight', '_envColorLeft', '_envColorRight', '_envColorLeftBoost', '_envColorRightBoost', '_envColorWhite', '_envColorWhiteBoost', '_obstacleColor'})
+                cosmetic_only(d.get('_customData', {}), {'_difficultyLabel', '_colorLeft', '_colorRight', '_envColorLeft', '_envColorRight', '_envColorLeftBoost', '_envColorRightBoost', '_envColorWhite', '_envColorWhiteBoost', '_obstacleColor'}, chroma_ok)
                 label = d['_difficulty']; name = map_key(mode, label)
                 if name in seen: raise ValueError('unknown/duplicate difficulty')
                 seen.add(name)
                 raw = json.loads(prepare.local_file(source, d['_beatmapFilename']).read_text(encoding='utf-8-sig'))
+                records = None
                 try:
+                    if chroma and (str(raw.get('_version', '')).startswith('2.') or str(raw.get('version', '')).startswith('3.')):
+                        import additive_chroma
+                        # Seconds come from the authored tempo map; the bundle only
+                        # stores the same instants as baked beats or sample regions.
+                        clock = Tempo(original['_beatsPerMinute'], raw.get('bpmEvents', []) if 'version' in raw else [])
+                        records = additive_chroma.extract(raw, clock.time, level)
+                        raw = additive_chroma.strip(raw)
                     if str(raw.get('_version', '')).startswith('2.'):
                         normalization = {}
                         raw = v2.convert_map(raw, allow_rotations=mode in ('90Degree','360Degree'), normalization=normalization, base_bpm=original['_beatsPerMinute'])
@@ -294,6 +325,8 @@ def import_song(source, output, ffmpeg='ffmpeg'):
                 if d.get('_customData'): ds[-1]['_customData'] = {k:v for k,v in d['_customData'].items() if k in __import__('additive_presentation').LEGACY or k == '_difficultyLabel'}
                 if '_beatmapColorSchemeIdx' in d: ds[-1]['_beatmapColorSchemeIdx'] = d['_beatmapColorSchemeIdx']
                 if native and advanced and preserve_v3: ds[-1]['_orbeatsNativeV3'] = True
+                if records and any(records.values()):
+                    chroma_charts.append(dict(mode=MODES.index(mode), difficulty=DIFFS.index(label), **records))
                 if native:
                     light_name = name.replace('/', '-') + '.lightshow.dat'
                     (stage / light_name).write_bytes(prepare.canonical(native_light))
@@ -322,6 +355,8 @@ def import_song(source, output, ffmpeg='ffmpeg'):
                   'note_counts': {k: prepare.note_count(v) for k, v in checked['maps'].items()},
                   'duration_seconds': checked['samples'] / 44100, 'stock_modified': False, 'deployed': False}
         (stage / 'import-report.json').write_bytes(prepare.canonical(report)); stage.rename(output)
+    if chroma_charts:
+        report['chroma_charts'] = chroma_charts  # returned only; never stored in the report file
     return report
 
 

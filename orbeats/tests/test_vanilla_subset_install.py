@@ -108,7 +108,7 @@ def test_installer_hashes_the_original_pack_and_skips_identity_for_renamed_chart
     assert body.count("score_source.publish(") == 2 and body.count("if publish_identity:") == 2
     for call in body.split("score_source.publish(")[:-1]:
         assert call.rstrip().endswith("if publish_identity:")
-    assert 'download(map_id, tmp / "download", vanilla_subset)' in body
+    assert 'download(map_id, tmp / "download", vanilla_subset, chroma=cap.get("chroma") in (1, 2, 3))' in body
 
 
 def test_cli_and_companion_pass_the_flag_only_when_requested(tmp_path, monkeypatch):

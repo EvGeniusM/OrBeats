@@ -1,3 +1,21 @@
+## 0.7.42 — Chroma level 3, unreleased
+
+- Plugin setup records `chroma: 3` for a plugin with `ORB_CHROMA_V3` (light
+  gradients); Chroma maps stay installable with levels 1, 2 and 3.
+
+## 0.7.41 — Chroma level reported by plugin setup, unreleased
+
+- Plugin setup records `chroma: 2` for a plugin with `ORB_CHROMA_V2` (rings and
+  lasers), `1` for colours only; installs pass that level to the importer.
+
+## 0.7.40 — Chroma label follows the plugin capability, unreleased
+
+- A BeatSaver map flagged Chroma is shown as “Needs validation” instead of
+  “Not compatible” only when the installed plugin declares `ORB_CHROMA_V1`
+  (plugin status reports `chroma`). Noodle, Mapping Extensions, Cinema and
+  Vivify still block. Without the capability nothing changes.
+- The desktop backend bundles `tools/additive_chroma.py`.
+
 ## 0.7.39 — Explicit “Vanilla part” installs, unreleased
 
 - Discover labels a pack that has mod-dependent charts AND at least one

@@ -1,3 +1,107 @@
+## 0.8086 — Chroma light gradients (stage 4c, not verified on PS4)
+
+- 0.8085 on PS4 (2026-11-12): ring rotation confirmed by the log counter (35766
+  Shivers: 196 applied, 0 fallbacks); lasers confirmed on 1a4af (single-laser
+  speed and paired-laser direction from the map, no crash).
+- New `ORB_CHROMA_V3` capability. `BSDACHR2` records may carry a light gradient
+  (flag 1024): start and end colour, duration in seconds (0 < d <= 60) and the
+  game's `EaseType` (1..31). Older plugins refuse such a sidecar whole.
+- After the game's own `LightSwitchEventEffect.HandleColorChangeBeatmapEvent`,
+  the light's `ColorTween` gets the gradient (from, to, start = event time,
+  duration, ease) and is handed to `TweeningManager.AddTweenToDataStructures`,
+  exactly as the game does for a vanilla transition event. No new hook; the
+  called function is fingerprinted, and the tween's class, namespace and field
+  offsets are confirmed once (a mismatch turns gradients off, colours stay).
+- Off events keep the game's behaviour. Approximation: on flash/fade events the
+  gradient replaces the fade (the light changes colour but does not go dark).
+- The per-level summary also counts applied gradients, gradients on off events
+  and layout fallbacks.
+
+## 0.8085 — Chroma ring/laser evidence in the log
+
+- 0.8084 on PS4 (2026-11-12): all five ring/laser fingerprints matched, 35766
+  Shivers loaded 98 ring events, no crash; the user saw strongly twisting rings.
+  The log could not show whether the hooks changed anything.
+- Each level now logs the first application of every effect kind with the
+  values the game chose and the values written, and at the next level start a
+  summary: applied ring rotations (and name-filtered ones), ring zooms, paired
+  and single laser events, plus records that fell back to the game's handler
+  because an object did not have the expected layout. No behaviour change.
+
+## 0.8084 — Chroma rings and lasers (stage 4a/4b, not verified on PS4)
+
+- New `ORB_CHROMA_V2` capability and `BSDACHR2` sidecar (v1 files still load).
+  Records may carry ring and laser parameters, with or without a colour.
+- Ring rotation (`TrackLaneRingsRotationEffectSpawner`): after the game's own
+  handler, the effect it just appended is rewritten with Chroma's angle
+  (direction, rotation), step, propagation (int, at least 1) and flexy speed,
+  V2 multipliers, `_reset` and `_counterSpin`. `nameFilter` compares the
+  spawner's object name, read once per object through `get_name` (the only
+  managed call in Chroma; exceptions caught, unreadable names ignore the filter).
+- Ring zoom (`TrackLaneRingsPositionStepEffectSpawner`): step and move speed
+  substituted for the duration of the game's handler.
+- Paired lasers (`LightPairRotationEventEffect`): direction argument and
+  `RotationData` enabled/rotationSpeed written per Chroma; `lockPosition` skips
+  the game's position reset. Single lasers (`LightRotationEventEffect`): speed
+  and direction; `lockPosition` approximated without Unity calls (value 0
+  freezes at speed 0; a lock on a laser the game switched off resets it).
+- All five functions are fingerprinted; a mismatch disables only rings/lasers,
+  colours keep working. Not active in diagnostic mode.
+
+## 0.8083 — one colour per object when several share a position
+
+- HW1 on PS4 (0.8082, 2026-11-12, user-observed): light colours visible on
+  SUPADOPA (4033c) and Heavy Is the Crown (40804); arcs of 55a43 took the Chroma
+  colour instead of the map palette, so object colouring works on hardware. All
+  seven arcs of each rainbow fan showed the first record's colour: they share
+  head time, lane, layer and hand and differ only in curvature.
+- Notes, arcs and walls now claim the next unused matching record in file order
+  (the order the game spawns equal-time objects); a new level load resets the
+  claims. Rainbow fans should show one colour per arc. Not yet verified on PS4.
+
+## 0.8082 — signed Chroma wall positions
+
+- Wall x/y in the Chroma sidecar are signed bytes, so decorative walls outside
+  the lanes (x = -1 or 4, found in BeatSaver 55a43) match the live
+  `ObstacleData.lineIndex`. Values 0..127 read exactly as before; existing
+  sidecars stay valid. Not verified on PS4.
+
+## 0.8081 — Chroma light events keyed by time (after hardware HW0)
+
+- HW0 on PS4 (0.8080 diagnostic mode, 2026-11-12): all ten 2.04 fingerprints
+  matched, the diagnostic hooks (light registration, light events, level start)
+  ran, and three full songs played without a crash. Colour hooks were not active
+  in that mode, so they are still untested on hardware.
+  The log showed that the game's environment-effects (strobe) filter drops most
+  rapid light events, rewrites some values and renumbers `sameTypeIndex`: one
+  map kept 200 of 785 events. Every live event still exists in the imported
+  chart at the same type and time.
+- Light colours are therefore looked up by event type and time (±5 ms), with the
+  live value choosing among records at the same time. The index-based check that
+  switched light colours off for the whole level at the first mismatch is gone;
+  an event without a record keeps the game colour. Replayed against the HW0 log,
+  104 and 108 of 200 live events get their authored colour (the rest carry none).
+- Sidecar format unchanged. Colours themselves are still not verified on PS4.
+
+## 0.8080 — Chroma level 1 (candidate, not verified on PS4)
+
+- New `ORB_CHROMA_V1` capability. For an OrBeats song with a `<id>-chroma.bin`
+  sidecar the plugin applies authored colours to basic light events (whole light
+  group), colour notes, arc heads and walls. Chain links, mirrored notes and
+  bombs keep game colours. Code lives in `src/chroma.cpp`; `main.cpp` only
+  installs it after the main hook.
+- Every hooked 2.04 function is checked by an FNV-1a 64 fingerprint of its body
+  before anything is patched; any mismatch leaves the game untouched. Classes and
+  field offsets are confirmed through the IL2CPP API on first use; a surprise
+  disables Chroma for the run.
+- Light events are matched by type, per-type index, time (±5 ms) and value; the
+  first mismatch (static lights, effect filter) turns light colours off for the
+  rest of the level. Without a sidecar every hook calls the original code.
+- Diagnostic mode (file `chroma-diagnostic` in the additive folder) changes no
+  colours and logs light registration and the first 200 light events per level.
+- Host-side unit tests only (decoder, light context, relocated prologues). Not
+  installed or run on a console.
+
 ## 0.8079 — transparent canonical OrBeats logo
 
 - Use the supplied root icon.svg as the canonical product artwork. The playlist

@@ -51,7 +51,7 @@ You need **Beat Saber CUSA12878, patch 2.04**, on a PS4 with **GoldHEN plugin su
 
 OrBeats imports supported vanilla **V2, V3 and V4** maps, including supported arcs, chains and lighting. It preserves authored gameplay rather than silently dropping unsupported features.
 
-The library supports **up to 64 custom songs**. Chroma, Noodle Extensions and custom environments are not supported. See the [compatibility guide](docs/native-map-expansion.md) for precise requirements and limits.
+The library supports **up to 64 custom songs**. Chroma, Noodle Extensions and custom environments are not supported (an unreleased candidate adds basic Chroma colours for lights, notes and walls; it is not yet verified on PS4). See the [compatibility guide](docs/native-map-expansion.md) for precise requirements and limits.
 
 ## Documentation
 

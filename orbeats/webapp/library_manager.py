@@ -186,7 +186,7 @@ def remove(config, id):
             f.rename(staged, BASE + "/template.bundle")
         core.commit_library(f, candidate, old, run, None)
         leftovers = []
-        for path in (*paths(song), BASE + "/" + id + "-media/map-info.json"):
+        for path in (*paths(song), BASE + "/" + id + "-media/map-info.json", BASE + "/" + id + "-chroma.bin"):
             try:
                 core.closed(f)
                 f.delete(path)
@@ -280,6 +280,7 @@ def plugin_status(config, artifact):
             "available_version": binary_version(candidate), "version_source": "binary" if version else "unknown",
             "active_elf_sha256": digest, "capability_matches": capability_matches,
             "declared_version_matches": version_matches, "max_songs": count,
+            "chroma": bool(capability_matches and version_matches and cap.get("chroma") in (1, 2, 3)),
             "registration": registration, "runtime_verified": False}
 
 
@@ -375,6 +376,7 @@ def deploy_plugin(config, artifact, release_version=None):
                         "active_elf_sha256": hashlib.sha256(canonical).hexdigest(),
                         "max_songs": 64,
                         "native_maps": 1 if b"ORB_NATIVE_MAPS_V1" in canonical else 0,
+                        "chroma": 3 if b"ORB_CHROMA_V3" in canonical else 2 if b"ORB_CHROMA_V2" in canonical else 1 if b"ORB_CHROMA_V1" in canonical else 0,
                         "max_library_bytes": MAX_BYTES,
                         "library_format": 4 if b"ORB_MODES_V1" in canonical else 3 if b"ORB_PRESENTATION_V1" in canonical else 2 if tuple(map(int, binary_version(canonical).split("."))) >= (0, 8073) else 1,
                     }

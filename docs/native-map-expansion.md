@@ -76,9 +76,40 @@ rotation events have their own native preservation path.
 
 ## Deliberate remaining restrictions
 
-- No Chroma, Noodle Extensions, Mapping Extensions, Cinema, Vivify, custom Unity
+- No Noodle Extensions, Mapping Extensions, Cinema, Vivify, custom Unity
   environments or unknown runtime requirements. Do not silently strip their
   gameplay/visual behaviours.
+- Chroma is supported only at level 1, and only with a plugin that declares
+  `ORB_CHROMA_V1` (plugin 0.8083 candidate, pipeline 0.5402; colours partly
+  verified on PS4). Accepted keys: `color`/`_color` on basic light events, colour notes,
+  arcs (head), chains and walls; `lightID`/`_lightID` are validated and accepted
+  but the colour is applied to the whole light group until stage 3b. Every other
+  Chroma or custom key (`_lightGradient`, `_propID`, `environment`,
+  `customEvents`, colours on bombs, …) still refuses the whole map. A Chroma
+  requirement is honoured only when every installed chart passes that list; the
+  plugin alone never lifts it. Colours travel in a separate bounded sidecar
+  `<id>-chroma.bin` (`BSDACHR1`, checksummed, published in the same transaction
+  as the bundle and removed with the song); the bundle itself carries no
+  `customData`. The plugin verifies every hooked 2.04 function by fingerprint,
+  finds each live light event by type and time (±5 ms), with the value choosing
+  among same-time records. The game's strobe filter drops and renumbers events
+  (seen on PS4), so a per-type index would not match; a dropped event simply
+  never asks, and an event without a record keeps the game colour. Chain links, mirrored notes and bombs keep
+  game colours. Without the sidecar every hook calls the original code.
+- Chroma level 2 (plugin 0.8084 / pipeline 0.5403, `ORB_CHROMA_V2`): ring
+  rotation and zoom (`direction`, `rotation`, `step`, `prop`, `speed`, V2
+  multipliers, `_reset`, `_counterSpin`, `nameFilter`) and lasers
+  (`speed`/`_preciseSpeed`, `direction`, `lockPosition`/`lockRotation`). Ring
+  rotation and lasers were seen working on PS4 with 0.8085 (see the hardware
+  matrix); ring zoom and `nameFilter` are not verified yet.
+  Differences from PC: ring propagation is an integer in the game; a single
+  (non-paired) laser locked while switched off resets its position.
+- Chroma level 3 (plugin 0.8086 / pipeline 0.5404 candidate, `ORB_CHROMA_V3`,
+  not verified on PS4): V2 `_lightGradient` with Chroma's easings except
+  `easeStep`, played by the game's own light `ColorTween`. Difference from PC:
+  on flash/fade events the gradient replaces the fade. Easing/lerpType outside a
+  gradient (V3 transitions), HSV, `_propID` and environment enhancement remain
+  refused.
 - Opt-in exception (pipeline 0.5401, `--vanilla-subset` / “Add vanilla part”):
   when a pack ALSO contains difficulties with no declared requirements, only
   those are installed, unchanged, and everything left out is listed. A mod-free

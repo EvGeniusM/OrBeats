@@ -50,6 +50,7 @@ FILES = (
     "tools/runtime_dispatch.py",
     "tools/build_pack_mode_bundles.py",
     "tools/additive_companion.py",
+    "tools/additive_chroma.py",
     "tools/score_source.py",
     "tools/additive_library.py",
     "tools/additive_limits.py",

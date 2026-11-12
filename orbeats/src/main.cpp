@@ -27,10 +27,11 @@
 #include "additive_runtime_library.h"
 #include "additive_probe_profile.h"
 #include "additive_menu_files.h"
+#include "additive_chroma_runtime.h"
 #include "orbeats_branding.h"
 
-#define PLUGIN_VERSION "v0.8079"
-__attribute__((used)) static const char kNativeMapsCapability[]="ORB_NATIVE_MAPS_V1 ORB_PRESENTATION_V1 ORB_MODES_V1";
+#define PLUGIN_VERSION "v0.8086"
+__attribute__((used)) static const char kNativeMapsCapability[]="ORB_NATIVE_MAPS_V1 ORB_PRESENTATION_V1 ORB_MODES_V1 ORB_CHROMA_V1 ORB_CHROMA_V2 ORB_CHROMA_V3";
 // Diagnostic build identity stays in logs, not in player notifications.
 #ifdef VERBOSE_LOG
 #define PLUGIN_VARIANT " DEBUG"
@@ -1933,6 +1934,7 @@ static int additive_code_matches(uint64_t address, const unsigned char* expected
         || size > (uint64_t)end - address) return 0;
     return memcmp((void*)address, expected, size) == 0;
 }
+static void chroma_log(const char* message) { log_write(message); }
 static void try_install_additive_hook(void) {
     if (!additive_requested() || g_additive_installed || g_additive_attempts >= 50) return;
     if (!additive_clean_proof()) {
@@ -2045,6 +2047,10 @@ static void try_install_additive_hook(void) {
     if (!stub) { additive_restore_probe_routes(); log_write("[ADDITIVE] detour allocation failed; no registration attempted"); return; }
     g_additive_installed = 1;
     log_write("[ADDITIVE] post-LoadAll hook armed; awaiting game-thread callback (not proof of registration)");
+    // Chroma colours only ever apply to our own library levels. A refusal here
+    // (unknown code bytes, no memory) leaves songs and every other hook as is.
+    BsdAdditive::ChromaHost chroma = {(uintptr_t)base, &g_additive_api, chroma_log};
+    BsdAdditive::chroma_install(chroma);
 }
 
 // ── Deferred TMP_Text hook installation ─────────────────────────────────────
@@ -2192,6 +2198,7 @@ extern "C" int module_stop(size_t argc, const void *args) {
         g_additive_installed = 0;
     }
     additive_restore_probe_routes();
+    BsdAdditive::chroma_uninstall();
     free_redirects();
     free_metadata();
     return 0;

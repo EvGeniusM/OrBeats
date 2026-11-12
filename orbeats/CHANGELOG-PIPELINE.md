@@ -1,3 +1,50 @@
+## 0.5404 — Chroma V2 light gradients (requires plugin 0.8086), unreleased
+
+- With a plugin that declares `ORB_CHROMA_V3`, V2 events may carry
+  `_lightGradient` (`_duration` in beats, `_startColor`, `_endColor`, optional
+  `_easing`). The duration is converted to seconds through the chart's tempo map
+  (0 < d <= 60 s); easing names map to the game's `EaseType` (`easeLinear` and
+  In/Out/InOut Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic,
+  Bounce). `easeStep`, unknown gradient fields, top-level `_easing`/`_lerpType`,
+  V3 `easing`/`lerpType` and `_propID` still refuse the map.
+- Installs and the BeatSaver download check accept Chroma levels 1, 2 and 3.
+
+## 0.5403 — Chroma ring and laser parameters (requires plugin 0.8084), unreleased
+
+- With a plugin that declares `ORB_CHROMA_V2`, V2 events may carry `_direction`,
+  `_lockPosition`, `_speed`/`_preciseSpeed`, `_step`, `_prop`, `_rotation`,
+  `_stepMult`/`_propMult`/`_speedMult`, `_reset`, `_counterSpin`, `_nameFilter`;
+  V3 events `direction`, `lockRotation`, `speed`, `step`, `prop`, `rotation`,
+  `nameFilter`. Values are type- and range-checked (speed/step/prop up to
+  ±100000, rotation ±3600, multipliers 0..100000). Gradients, easing, lerpType,
+  `_propID` and environment keys still refuse the whole map.
+- The sidecar is `BSDACHR2` only when such parameters are present; colour-only
+  maps keep writing byte-identical `BSDACHR1`. A plugin with `ORB_CHROMA_V1`
+  only keeps the strict level-1 whitelist.
+- Python- and C++-side reference files cross-checked in tests. Not verified on PS4.
+
+## 0.5402 — Chroma level-1 colours (requires plugin 0.8080), unreleased
+
+- With a plugin that declares `ORB_CHROMA_V1`, V2/V3 maps may carry
+  `color`/`_color` on basic light events, colour notes, arcs, chains and walls,
+  and `lightID`/`_lightID` (validated, applied to the whole group for now). Any
+  other custom key still refuses the whole map, listed by place
+  (`event._lightGradient`, `chart.environment`, …). A Chroma requirement is
+  honoured only when every chart passes; the plugin alone never lifts it.
+- New `tools/additive_chroma.py`: extraction in seconds from the authored tempo
+  map, per-type event numbering, deterministic bounded `BSDACHR1` sidecar.
+  The bundle still carries no `customData`.
+- The sidecar is published in the install transaction before `library.bin`,
+  undone if the library commit fails, never overwritten with different bytes,
+  and deleted when the song is removed. Maps without Chroma get no sidecar.
+- `download()` no longer refuses on the BeatSaver Chroma flag when the plugin is
+  capable; the importer decides from the actual keys. Without the capability the
+  behaviour is unchanged.
+- Wall x/y are written as signed bytes (decorative walls at x = -1/4 used to
+  abort the install before any console write). Needs plugin 0.8082 to match.
+- The Python encoder's reference file is decoded by the native reader in tests.
+  Not verified on PS4.
+
 ## 0.5401 — Opt-in vanilla subset, overbright lights, one-link chains, unreleased
 
 - New opt-in `--vanilla-subset` (with `--additive-install` only; default
