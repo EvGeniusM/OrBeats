@@ -217,7 +217,7 @@ def reconstruct_ogg(fsb, *, sample_rate=44100):
     frames = descriptor >> 34
     if not sample_rate <= frames <= max_audio_seconds() * sample_rate or descriptor != 1 | (rate_code << 1) | (1 << 5) | (frames << 34):
         raise ValueError("compressed FSB sample descriptor mismatch")
-    if table_size % 8 or not 8 <= table_size <= 8 * 601 or 80 + table_size > start:
+    if table_size % 8 or not 8 <= table_size <= 8 * (max_audio_seconds() + 1) or 80 + table_size > start:
         raise ValueError("compressed FSB seek bounds mismatch")
     if chunk != (11 << 25) | ((8 + table_size) << 1) or any(fsb[80 + table_size : start]):
         raise ValueError("compressed FSB metadata/padding mismatch")

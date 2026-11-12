@@ -64,4 +64,5 @@ def test_host_ceiling_matches_the_native_library_reader():
 def test_no_private_copy_of_the_audio_limit_remains(path):
     text = (ROOT / path).read_text(encoding="utf-8")
     assert "max_audio_seconds()" in text
-    assert not re.search(r"\b600\b", text), "duplicate audio limit in " + path
+    # 599/601 catch bounds derived from the limit, e.g. one seek entry per second.
+    assert not re.search(r"\b(599|600|601)\b", text), "duplicate audio limit in " + path
