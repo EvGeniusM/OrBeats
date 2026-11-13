@@ -101,6 +101,9 @@ console.log('vanilla part verified');
     css = (ROOT / "webapp/static/companion.css").read_text(encoding="utf-8")
     unknown = css[css.index(".compatibility-unknown {"):].split("}")[0].split("{")[1]
     assert css[css.index(".compatibility-subset {"):].split("}")[0].split("{")[1] == unknown  # same yellow
+    # Search must know the plugin's Chroma level without a visit to Settings (SUPADOPA was "Not compatible").
+    assert "checkPluginVersion().catch(() => {});" in source
+    assert '$("results").innerHTML = state.maps.map(card).join("");' in source
     assert 'check.status === "subset" && !subset' in source
     assert "...(subset ? { vanilla_subset: true } : {})" in source
     assert 'data-subset="${c.status === "subset"}"' in source

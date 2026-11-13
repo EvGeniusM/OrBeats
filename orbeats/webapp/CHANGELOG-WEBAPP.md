@@ -1,3 +1,11 @@
+## 0.7.47 — Chroma maps are recognised without a manual plugin check, unreleased
+
+- The read-only plugin check now runs once at startup. Before, search learned
+  the plugin's Chroma level only after “Check plugin version” in Settings, so
+  every Chroma map (e.g. 4033c SUPADOPA) showed “Not compatible” on a fresh
+  start. Shown results are redrawn when the answer changes. A console that is
+  off or not configured keeps Chroma blocked, as before.
+
 ## 0.7.46 — left-out charts are named, unreleased
 
 - Search: Lightshow, Legacy and Lawless charts no longer mark a pack “Not

@@ -807,7 +807,15 @@ async function initialize() {
         target.textContent = "Checking the installed plugin binary…";
         try {
             const r = await api("/api/orbis/plugin");
-            chromaCapable = r.chroma === true;
+            const capable = r.chroma === true;
+            if (capable !== chromaCapable) {
+                chromaCapable = capable;
+                // Badges and install buttons of shown maps depend on it; refresh them without a new search.
+                if (state.maps.length) {
+                    $("results").innerHTML = state.maps.map(card).join("");
+                    updateQueueButtons();
+                }
+            }
             const installed = !r.installed ? "Not installed" : r.installed_version || "Unknown binary";
             const checks = r.capability_matches && r.declared_version_matches ? "Capability matches" : "Capability needs review";
             const registration = r.registration === "registered_once" ? "Registered once" : "Registration needs review";
@@ -818,6 +826,9 @@ async function initialize() {
         }
     }
     $("check-plugin-version").onclick = safely(checkPluginVersion);
+    // Read-only plugin check at startup so search knows the Chroma level before the first results.
+    // A console that is off or not configured leaves Chroma blocked until a later check.
+    checkPluginVersion().catch(() => {});
 	$("deploy-plugin").onclick = safely(async () => {
 		if (state.busy) throw Error("Wait for the active job.");
 		if (
