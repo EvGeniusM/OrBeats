@@ -162,8 +162,10 @@ rotation events have their own native preservation path.
   geometry beyond the validated vanilla bounds and no nonempty V2/V3 waypoints.
 - Native advanced difficulties share one verified sample/BPM timeline. Different
   per-difficulty BPM-region layouts refuse, even if the music file is shared.
-- Existing finite bounds remain: audio up to600seconds (the native reader
-  accepts1800; longer than600is unproven on PS4 memory and reachable only via
+- Existing finite bounds remain: audio up to 780 seconds (pipeline 0.5409; played
+  on PS4 with plugin 0.8079: a 780 s synthetic Vorbis song and the 735 s map
+  475ef; the native reader accepts 1800; longer than 780 is unproven on PS4
+  memory and reachable only via
   the developer variable `ORBEATS_DEV_MAX_AUDIO_SECONDS`),64library entries and
   131072manifest bytes, authored offset within±10seconds, validated per-array and
   aggregate object budgets. These are limits, not an unlimited-capacity claim.

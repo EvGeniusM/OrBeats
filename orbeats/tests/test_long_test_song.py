@@ -74,7 +74,9 @@ def test_variants_differ_and_bad_requests_refuse(tmp_path):
     a = gen.info_for(13, "dense", 44100, "vorbis")
     b = gen.info_for(13, "dense", 44100, "pcm")
     assert a["_songName"] != b["_songName"]  # distinct level IDs per variant
-    assert gen.summary(13, "dense", 44100, "vorbis")["install_environment"] == {limits.ENV: "780"}
+    # 13 min is the played 780 s default; one minute more needs the developer override.
+    assert gen.summary(13, "dense", 44100, "vorbis")["install_environment"] == {}
+    assert gen.summary(14, "dense", 44100, "vorbis")["install_environment"] == {limits.ENV: "840"}
     (tmp_path / "exists").mkdir()
     for kwargs in (dict(minutes=0), dict(minutes=31), dict(minutes=1.5), dict(profile="huge"), dict(rate=22050),
                    dict(codec="mp3"), dict(rate=48000, codec="pcm")):

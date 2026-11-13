@@ -1,3 +1,11 @@
+## 0.5409 — default audio limit 780 s, unreleased
+
+- The host default audio length is 780 s (was 600 s): the longest length
+  played on PS4 so far (2026-11-12, plugin 0.8079: a 780 s dense synthetic
+  Vorbis song and the 735 s map 475ef). The 780 s PCM16 fallback and 48 kHz
+  variants were not played. The developer override still reaches at most the
+  native reader's 1800 s and may not go below the default.
+
 ## 0.5408 — Lightshow, Legacy and Lawless charts are left out, unreleased
 
 - A pack with `Lightshow` (lights only, no notes), `Legacy` (an older version

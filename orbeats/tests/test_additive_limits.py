@@ -22,13 +22,13 @@ def audio(seconds, rate=44100):
 
 def test_default_stays_at_the_proven_length_and_override_is_bounded(monkeypatch):
     monkeypatch.delenv(limits.ENV, raising=False)
-    assert limits.max_audio_seconds() == limits.DEFAULT_AUDIO_SECONDS == 600
+    assert limits.max_audio_seconds() == limits.DEFAULT_AUDIO_SECONDS == 780
     monkeypatch.setenv(limits.ENV, "")
-    assert limits.max_audio_seconds() == 600
-    for good in ("600", "735", "1800"):
+    assert limits.max_audio_seconds() == 780
+    for good in ("780", "900", "1800"):
         monkeypatch.setenv(limits.ENV, good)
         assert limits.max_audio_seconds() == int(good)
-    for bad in ("599", "1801", "0", "-1", "9e2", "900.0", " 900", "abc", "99999"):
+    for bad in ("600", "779", "1801", "0", "-1", "9e2", "900.0", " 900", "abc", "99999"):
         monkeypatch.setenv(limits.ENV, bad)
         with pytest.raises(ValueError, match=limits.ENV):
             limits.max_audio_seconds()
@@ -36,13 +36,13 @@ def test_default_stays_at_the_proven_length_and_override_is_bounded(monkeypatch)
 
 def test_native_audio_validation_follows_the_single_limit(monkeypatch):
     monkeypatch.delenv(limits.ENV, raising=False)
-    native.audio(audio(600))
+    native.audio(audio(780))
     with pytest.raises(ValueError, match="sample count"):
-        native.audio(audio(601))
-    monkeypatch.setenv(limits.ENV, "735")
-    native.audio(audio(735))
+        native.audio(audio(781))
+    monkeypatch.setenv(limits.ENV, "900")
+    native.audio(audio(900))
     with pytest.raises(ValueError, match="sample count"):
-        native.audio(audio(736))
+        native.audio(audio(901))
     monkeypatch.setenv(limits.ENV, "1800")
     native.audio(audio(1800, 48000))
     with pytest.raises(ValueError, match="sample count"):
