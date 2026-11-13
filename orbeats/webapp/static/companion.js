@@ -255,8 +255,9 @@ function compatibility(map) {
 	}
 	const leftOutNote = leftOut.size ? ` Not installed: ${[...leftOut].join(", ")} (no notes, an older version, or Lawless, not supported yet).` : "";
 	// Nothing is installed by default; a mod-free Lawless set is still offered as the explicit vanilla part.
-	if (!installable && vanilla) reasons.add("Lawless charts are installed only as the vanilla part");
-	else if (!installable) return {status: "unsupported", label: "Not compatible", reason: "Only " + [...leftOut].join(", ") + "; nothing playable would be installed."};
+	// Only when every readable chart was left out; malformed metadata stays "Needs validation" below.
+	if (!installable && leftOut.size && vanilla) reasons.add("Lawless charts are installed only as the vanilla part");
+	else if (!installable && leftOut.size) return {status: "unsupported", label: "Not compatible", reason: "Only " + [...leftOut].join(", ") + "; nothing playable would be installed."};
 	// Experimental: installable, but only as the mod-free part. The request always carries the explicit vanilla_subset flag.
 	if (reasons.size && vanilla) return {status: "subset", label: "Experimental", reason: `Experimental: only the ${vanilla} mod-free chart${vanilla === 1 ? "" : "s"} will be installed, unchanged. Left out: ` + [...reasons].join("; ") + ". A Lawless set is listed as Standard when no Standard chart remains and then has no ScoreSaber leaderboard. The archive is validated before installation."};
 	if (reasons.size) return {status: "unsupported", label: "Not compatible", reason: [...reasons].join("; ") + ". OrBeats refuses the whole pack rather than stripping unsupported charts/effects."};

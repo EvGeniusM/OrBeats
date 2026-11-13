@@ -86,6 +86,8 @@ if(status([lawless,null])!=='subset')throw Error('Malformed sibling');
 const left=compatibility(map([chart,{...chart,characteristic:'Lightshow'},{...chart,characteristic:'Legacy',ne:true},{...lawless,ne:true}]));
 if(left.status!=='likely'||!left.reason.includes('Not installed: Lightshow charts, Legacy charts, Lawless charts'))throw Error('Left-out charts: '+left.reason);
 if(status([{...chart,characteristic:'Lightshow'},{...chart,characteristic:'Legacy'}])!=='unsupported')throw Error('Nothing playable');
+if(status([{...chart,characteristic:'Lightshow'},null])!=='unsupported')throw Error('Left out beside malformed metadata');
+if(status([null])!=='unknown')throw Error('Malformed metadata alone needs validation');
 const badge=compatibilityBadge(map([mod,lawless]));
 if(!badge.includes('compatibility-subset')||!badge.includes('! Experimental'))throw Error('Badge');
 `,ctx);
