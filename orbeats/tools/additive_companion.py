@@ -355,6 +355,8 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
             # Chroma data is extracted only up to the level the active plugin declared:
             # 1 = colours (ORB_CHROMA_V1), 2 = + rings and lasers (ORB_CHROMA_V2), 3 = + light gradients (ORB_CHROMA_V3), 4 = + environment (ORB_CHROMA_V4), 5 = + environment copies (ORB_CHROMA_V5), 6 = + per-light lightID (ORB_CHROMA_V6).
             import_report = importer.import_song(source, normalized, **({"chroma": cap["chroma"]} if cap.get("chroma") in (1, 2, 3, 4, 5, 6) else {}))
+            for note in import_report.get("ignored_metadata", []):
+                print("[additive] Not installed (descriptive only): " + note, flush=True)
             for difficulty, count in import_report.get("ignored_v2_wall_placeholders", {}).items():
                 print(f"[additive] Ignored {count} all-zero legacy wall placeholders in {difficulty}; playable walls retained.", flush=True)
             for difficulty, speed in import_report.get("default_njs", {}).items():

@@ -46,6 +46,8 @@ def v4_difficulty_custom(value):
     other custom behaviour. Validate the entire dictionary before returning it.
     """
     names = {legacy[1:]: legacy for legacy in LEGACY}
+    # Descriptive keys keep their V2 spelling; the V3 importer validates, drops and reports them.
+    names.update(information="_information", warnings="_warnings", settings="_settings")
     if not isinstance(value, dict) or set(value) - names.keys() - {"difficultyLabel"}:
         raise ValueError("unsupported mod-dependent InfoV4 difficulty metadata")
     result = {}
@@ -54,6 +56,8 @@ def v4_difficulty_custom(value):
             if not isinstance(item, str) or len(item) > 200:
                 raise ValueError("invalid InfoV4 difficulty label")
             result["_difficultyLabel"] = item
+        elif name in ("information", "warnings", "settings"):
+            result[names[name]] = item
         else:
             color(item)
             result[names[name]] = dict(item)

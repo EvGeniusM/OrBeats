@@ -260,3 +260,12 @@ def test_banner_uses_current_brand(capsys, monkeypatch):
         pipeline.main()
     out = capsys.readouterr().out
     assert "OrBeats Pipeline" in out and "Beat Saber Deluxe Pipeline" not in out
+
+
+def test_v4_descriptive_difficulty_metadata_keeps_v2_spelling_for_the_importer():
+    from additive_presentation import v4_difficulty_custom
+
+    out = v4_difficulty_custom({"information": ["x"], "warnings": [], "settings": {"playerOptions": {}}})
+    assert out == {"_information": ["x"], "_warnings": [], "_settings": {"playerOptions": {}}}
+    with pytest.raises(ValueError, match="mod-dependent"):
+        v4_difficulty_custom({"requirements": ["Chroma"]})

@@ -1,3 +1,13 @@
+## 0.5410 — descriptive difficulty metadata no longer refuses a map, unreleased
+
+- `_information`, `_warnings` (lists of short strings) and `_settings`
+  (SongCore/Heck recommended player settings, bounded size) in Info or
+  difficulty custom data are accepted, not installed, and named in the install
+  log (`Not installed (descriptive only): ...`, `ignored_metadata`). A
+  recommendation of the All effects setting is called out. InfoV4
+  `information`/`warnings`/`settings` take the same path. Malformed values
+  still refuse. BeatSaver 465b8 was refused for `_settings`.
+
 ## 0.5409 — default audio limit 780 s, unreleased
 
 - The host default audio length is 780 s (was 600 s): the longest length

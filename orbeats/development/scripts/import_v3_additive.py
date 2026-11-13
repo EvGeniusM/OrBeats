@@ -148,8 +148,30 @@ def convert_map(data, bpm):
     return out
 
 
-def cosmetic_only(custom, allowed, chroma_ok=False):
-    empty_lists = {'_requirements', '_suggestions', '_warnings', '_information'}
+# Shown to the player on PC (information/warnings) or offered for acceptance
+# (SongCore/Heck `_settings`, e.g. "All effects"); never change gameplay. They are
+# not installed and are named in the report.
+DESCRIPTIVE_LISTS = ('_information', '_warnings')
+MAX_DESCRIPTIVE = 4096
+
+
+def descriptive(key, value):
+    """Report line for an accepted descriptive key, or None when it is not one."""
+    if key in DESCRIPTIVE_LISTS:
+        if not isinstance(value, list) or len(value) > 32 or any(not isinstance(v, str) or len(v) > 500 for v in value):
+            raise ValueError('invalid descriptive metadata: ' + key)
+        return key + ': ' + ' | '.join(value)[:200] if value else None
+    if key == '_settings':
+        if not isinstance(value, dict) or len(json.dumps(value)) > MAX_DESCRIPTIVE:
+            raise ValueError('invalid recommended settings')
+        preset = (value.get('_playerOptions') or {}).get('_environmentEffectsFilterExpertPlusPreset') if isinstance(value.get('_playerOptions'), dict) else None
+        hint = ' (recommends the All effects setting)' if preset == 'AllEffects' else ''
+        return 'recommended player settings ignored' + hint
+    return None
+
+
+def cosmetic_only(custom, allowed, chroma_ok=False, notes=None):
+    empty_lists = {'_requirements', '_suggestions'}
     empty_strings = {'_customEnvironment', '_customEnvironmentHash'}
     offsets = {'_editorOffset', '_editorOldOffset'}
     if not isinstance(custom, dict):
@@ -160,6 +182,11 @@ def cosmetic_only(custom, allowed, chroma_ok=False):
                 raise ValueError('invalid descriptive timing annotation: ' + key)
             continue
         if key in allowed:
+            continue
+        if key in DESCRIPTIVE_LISTS or key == '_settings':
+            line = descriptive(key, value)
+            if line and notes is not None and line not in notes:
+                notes.append(line)
             continue
         if key in empty_lists and value == []:
             continue
@@ -184,7 +211,8 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
     if not str(original.get('_version', '')).startswith('2.'):
         raise ValueError('InfoV2 required')
     # Descriptive annotations are not playback offsets; retain authored note/audio timing.
-    cosmetic_only(original.get('_customData', {}), {'_editors', '_contributors', '_firstNoteBeat', '_introPadSeconds'})
+    notes = []  # descriptive metadata that is not installed, for the report
+    cosmetic_only(original.get('_customData', {}), {'_editors', '_contributors', '_firstNoteBeat', '_introPadSeconds'}, notes=notes)
     audio = prepare.local_file(source, original['_songFilename'])
     info = {k: original[k] for k in ('_songName', '_songSubName', '_songAuthorName', '_levelAuthorName', '_beatsPerMinute') if k in original}
     for key in ('_orbeatsLufs', '_colorSchemes'):
@@ -252,7 +280,7 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
             map_key(mode, 'Easy')
             ds = []
             for d in g.get('_difficultyBeatmaps', []):
-                cosmetic_only(d.get('_customData', {}), {'_difficultyLabel', '_colorLeft', '_colorRight', '_envColorLeft', '_envColorRight', '_envColorLeftBoost', '_envColorRightBoost', '_envColorWhite', '_envColorWhiteBoost', '_obstacleColor'}, chroma_ok)
+                cosmetic_only(d.get('_customData', {}), {'_difficultyLabel', '_colorLeft', '_colorRight', '_envColorLeft', '_envColorRight', '_envColorLeftBoost', '_envColorRightBoost', '_envColorWhite', '_envColorWhiteBoost', '_obstacleColor'}, chroma_ok, notes)
                 label = d['_difficulty']; name = map_key(mode, label)
                 if name in seen: raise ValueError('unknown/duplicate difficulty')
                 seen.add(name)
@@ -380,6 +408,7 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
                   'source_info_sha256': prepare.digest(infos[0].read_bytes()), 'original_bpm_events': tempos,
                   'skipped_difficulties': skipped, 'default_njs': default_njs,
                   'ignored_v2_wall_placeholders': ignored_placeholders,
+                  'ignored_metadata': notes,
                   'timing': 'Native sample BPM regions preserved' if native_audio else 'BPM events baked into constant-BPM coordinates; wall and arc start+end seconds preserved',
                   'lighting_environment': info.get('_environmentName', 'stock fallback'),
                   'lighting_counts': {k: {field: len(v.get(field, [])) for field in ('colorBoostBeatmapEvents', 'lightColorEventBoxGroups', 'lightRotationEventBoxGroups')} for k, v in checked['maps'].items()},

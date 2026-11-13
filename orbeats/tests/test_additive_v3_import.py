@@ -298,3 +298,24 @@ def test_invalid_environment_references_still_refuse(tmp_path, names, index):
     info['_difficultyBeatmapSets'][0]['_difficultyBeatmaps'][0]['_environmentNameIdx']=index
     file.write_text(json.dumps(info))
     with pytest.raises(ValueError,match='environment index'):imp.import_song(source,tmp_path/'out')
+
+
+def test_descriptive_metadata_is_not_installed_and_is_reported():
+    # BeatSaver 465b8: shown or offered to the player on PC, never gameplay.
+    custom = {'_settings': {'_playerOptions': {'_environmentEffectsFilterExpertPlusPreset': 'AllEffects'},
+                            '_environments': {'_overrideEnvironments': False}},
+              '_information': ['This map is meant to be played on 1.22 or later.'], '_warnings': ['Flashing Lights']}
+    notes = []
+    imp.cosmetic_only(custom, set(), notes=notes)
+    imp.cosmetic_only(custom, set(), notes=notes)  # a second difficulty repeats nothing
+    assert notes == ['recommended player settings ignored (recommends the All effects setting)',
+                     '_information: This map is meant to be played on 1.22 or later.', '_warnings: Flashing Lights']
+
+
+@pytest.mark.parametrize('custom', [
+    {'_settings': []}, {'_settings': {'x': 'y' * 5000}}, {'_information': 'text'}, {'_warnings': [1]},
+    {'_information': ['x'] * 33},
+])
+def test_malformed_descriptive_metadata_is_refused(custom):
+    with pytest.raises(ValueError, match='descriptive|settings'):
+        imp.cosmetic_only(custom, set())
