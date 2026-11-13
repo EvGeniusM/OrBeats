@@ -110,6 +110,7 @@ def main():
         "console_transaction",
         "additive_companion",
         "additive_chroma",
+        "additive_chroma_regex",
         "score_source",
         "additive_library",
         "additive_limits",

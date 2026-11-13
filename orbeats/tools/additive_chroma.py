@@ -1,11 +1,18 @@
-"""Chroma colors (level 1), ring/laser parameters (level 2) and V2 light
-gradients (level 3) -> bounded sidecar.
+"""Chroma colors (level 1), ring/laser parameters (level 2), V2 light
+gradients (level 3), static environment changes (level 4) and environment
+copies (level 5) and per-light `lightID` (level 6) -> bounded sidecar.
 
-<id>-chroma.bin is "BSDACHR1" when only colours are present and "BSDACHR2" when
-ring or laser parameters or gradients are. Level 2 keys are accepted only for a
-plugin that declared ORB_CHROMA_V2 (`level=2`), `_lightGradient` only for
-ORB_CHROMA_V3 (`level=3`). Anything else a mapper stored in customData
-stays unsupported and is reported, never silently dropped.
+<id>-chroma.bin is "BSDACHR1" when only colours are present, "BSDACHR2" when
+ring or laser parameters or gradients are, "BSDACHR3" when any chart
+changes its environment and "BSDACHR4" when an entry copies objects. Level 2 keys are accepted only for a plugin that
+declared ORB_CHROMA_V2 (`level=2`), `_lightGradient` only for ORB_CHROMA_V3
+(`level=3`), the chart's `environment`/`_environment` only for ORB_CHROMA_V4
+(`level=4`, active + transform; spec stage 5, 5a), `duplicate`/`_duplicate`
+only for ORB_CHROMA_V5 (`level=5`, stage 5b). `lightID`/`_lightID` is accepted
+at every level but written (as the light's index, through Chroma's table of the
+map's environment) only for ORB_CHROMA_V6 (`level=6`, stage 3b, light types
+0-4). Anything else a mapper
+stored in customData stays unsupported and is reported, never silently dropped.
 Binary layout: docs/plans/2026-11-12-chroma-stage3-native-colors-spec.md, section 4;
 the production reader is include/additive_chroma.h. All numbers little-endian.
 
@@ -14,20 +21,50 @@ by time of the events the importer really writes. Equal-time order is unproven
 on hardware (spec 3.3), so it is the file order.
 """
 
+import json
 import math
+import os
 import re
 import struct
+from pathlib import Path
+
+import additive_chroma_regex
 
 MAGIC = b"BSDACHR1"
 MAGIC_V2 = b"BSDACHR2"
-MAX_BYTES = 8 << 20
+MAGIC_V3 = b"BSDACHR3"
+MAGIC_V4 = b"BSDACHR4"
+# 16 MiB: 34aa3 KDA is 9.7 MiB (four identical 40k-event light shows).
+MAX_BYTES = 16 << 20
 LIMIT = 200_000
 MAX_CHARTS = 25
 MAX_LIGHTS = 1024
 MAX_TIME = 3600.0
 MAX_COLOR = 16.0
-EVENT_KEYS = frozenset({"color", "_color"})  # lightID/_lightID: accepted, not written before stage 3b
-LIGHT_KEYS = frozenset({"lightID", "_lightID"})
+EVENT_KEYS = frozenset({"color", "_color"})
+LIGHT_KEYS = frozenset({"lightID", "_lightID"})  # accepted at every level; written from level 6 (stage 3b)
+# Level 6 (stage 3b): the light switch types whose lightsID is type + 1 on every
+# stock environment; other types keep colouring the whole group.
+LIGHT_TYPES = frozenset({0, 1, 2, 3, 4})
+FADE_VALUES = frozenset({4, 8, 12})  # transitions: the previous event fades into them
+FADE_CHECKED = frozenset({0, 1, 5, 9, 4, 8, 12})  # values whose handler looks for the next transition
+_TABLES = None
+
+
+def light_table(environment):
+    """Chroma's {lightsID: {lightID: index}} for a stock environment, or {} (ids are indices)."""
+    global _TABLES
+    if _TABLES is None:
+        # Next to this module, or in the desktop runtime's tools (a frozen module has no source folder).
+        name = "chroma_light_id_tables.json"
+        places = [Path(__file__).with_name(name)]
+        if os.environ.get("ORBEATS_RUNTIME_ROOT"):
+            places.append(Path(os.environ["ORBEATS_RUNTIME_ROOT"]) / "tools" / name)
+        path = next((p for p in places if p.is_file()), places[0])
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        _TABLES = {env: {int(g): {int(k): v for k, v in m.items()} for g, m in groups.items()}
+                   for env, groups in raw["tables"].items()}
+    return _TABLES.get(environment, {}) if isinstance(environment, str) else {}
 # Level 2 (stage 4a/4b): ring rotation/zoom and laser parameters. Chroma reads
 # them on every event; only the ring (8, 9) and laser (12, 13) effects use them.
 EFFECT_KEYS_V2 = frozenset({"_direction", "_lockPosition", "_speed", "_preciseSpeed", "_step", "_prop", "_rotation",
@@ -54,6 +91,23 @@ for _n, _base in enumerate(_EASE_BASES):
     for _k, _kind in enumerate(("In", "Out", "InOut")):
         EASINGS["ease" + _kind + _base] = 2 + 3 * _n + _k
 OBJECT_KEYS = frozenset({"color", "_color"})
+# Level 4 (stage 5a): environment entries. Chroma's lookup methods in file order.
+LOOKUP_METHODS = ("Regex", "Exact", "Contains", "StartsWith", "EndsWith")
+ENV_FIELDS = ("scale", "position", "localPosition", "rotation", "localRotation")
+ENV_KEYS_V3 = frozenset({"id", "lookupMethod", "active", "components"} | set(ENV_FIELDS))
+ENV_KEYS_V2 = frozenset({"_id", "_lookupMethod", "_active"} | {"_" + f for f in ENV_FIELDS})
+# ILightWithId with every value null does nothing in Chroma (LightWithIdCustomizer).
+NO_OP_COMPONENT = ("ILightWithId", frozenset({"lightID", "type"}))
+ENV_HAS_ACTIVE, ENV_ACTIVE = 1, 2
+ENV_FIELD_BITS = dict(scale=4, position=8, localPosition=16, rotation=32, localRotation=64)
+ENV_DUPLICATE = 128
+MAX_DUPLICATE = 100
+DUPLICATE_KEYS = frozenset({"duplicate", "_duplicate"})  # level 5 (stage 5b)
+MAX_ENV_ENTRIES = 2048
+MAX_ENV_ID = 512
+MAX_ENV_NAME = 63
+MAX_ENV_VALUE = 100000.0
+NOTE_LINES_DISTANCE = 0.6  # V2 positions are in lane widths (Heck TransformData)
 # Top-level chart customData keys the importers already accept as cosmetic.
 COSMETIC_V3 = frozenset({"lighter", "time", "bookmarks", "bookmarksUseOfficialBpmEvents"})
 COSMETIC_V2 = frozenset(
@@ -131,8 +185,12 @@ def unsupported_keys(chart, level=1):
             found.update(place + "." + k for k in custom if k not in allowed)
     cosmetic = COSMETIC_V2 if legacy else COSMETIC_V3
     top = _custom(chart, legacy)
+    env_key = "_environment" if legacy else "environment"
     for key, value in top.items():
         if key in cosmetic:
+            continue
+        if key == env_key and level >= 4:
+            found.update(_environment_keys(value, legacy, level))
             continue
         if key in ("_requirements", "_suggestions") and value == []:
             continue
@@ -148,6 +206,81 @@ def unsupported_keys(chart, level=1):
     return sorted(found)
 
 
+def _environment_keys(value, legacy, level=4):
+    """Unsupported keys inside an environment list (shape errors are left to extract)."""
+    allowed = ENV_KEYS_V2 if legacy else ENV_KEYS_V3
+    if level >= 5:
+        allowed = allowed | {("_" if legacy else "") + "duplicate"}
+    found = set()
+    for entry in value if isinstance(value, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        found.update("environment." + k for k in entry if k not in allowed)
+        components = entry.get("components")
+        if not legacy and components is not None:
+            if not isinstance(components, dict):
+                found.add("environment.components")
+                continue
+            for name, body in components.items():
+                no_op = (name == NO_OP_COMPONENT[0] and isinstance(body, dict) and set(body) <= NO_OP_COMPONENT[1]
+                         and all(v is None for v in body.values()))
+                if not no_op:
+                    found.add("environment.components." + str(name))
+    return found
+
+
+def _env_vector(value, what, scale=1.0):
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("invalid Chroma environment " + what)
+    out = [float(_number(v, "Chroma environment " + what)) * scale for v in value]
+    if any(abs(v) > MAX_ENV_VALUE for v in out):
+        raise ValueError("Chroma environment " + what + " out of range")
+    return out
+
+
+def environment(chart, level=4):
+    """Validated level-4/5 entries of the chart's environment list, in file order (may be empty)."""
+    legacy = is_v2(chart)
+    value = _custom(chart, legacy).get("_environment" if legacy else "environment")
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_ENV_ENTRIES:
+        raise ValueError("invalid Chroma environment list")
+    prefix = "_" if legacy else ""
+    out = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid Chroma environment entry")
+        if _environment_keys([entry], legacy, level):
+            raise ValueError("unsupported Chroma environment keys")
+        ident, method = entry.get(prefix + "id"), entry.get(prefix + "lookupMethod")
+        if not isinstance(ident, str) or not 1 <= len(ident) <= MAX_ENV_ID or any(not 0x20 <= ord(c) <= 0x7E for c in ident):
+            raise ValueError("invalid Chroma environment id")
+        if method not in LOOKUP_METHODS:
+            raise ValueError("invalid Chroma environment lookupMethod")
+        if method == "Regex":
+            additive_chroma_regex.check(ident)
+        record = dict(method=LOOKUP_METHODS.index(method), id=ident)
+        active = entry.get(prefix + "active")
+        if active is not None:
+            if type(active) is not bool:
+                raise ValueError("invalid Chroma environment active")
+            record["active"] = active
+        for field in ENV_FIELDS:
+            raw = entry.get(prefix + field)
+            if raw is not None:
+                record[field] = _env_vector(raw, field, NOTE_LINES_DISTANCE if legacy and "osition" in field else 1.0)
+        duplicate = entry.get(prefix + "duplicate")
+        if duplicate is not None:
+            if type(duplicate) is not int or not 1 <= duplicate <= MAX_DUPLICATE:
+                raise ValueError("invalid Chroma environment duplicate")
+            record["duplicate"] = duplicate
+        if len(record) == 2:
+            continue  # nothing to change (e.g. only a no-op component)
+        out.append(record)
+    return out
+
+
 def strip(chart):
     """Copy of the chart without per-object customData; call only when unsupported_keys is empty."""
     legacy = is_v2(chart)
@@ -158,6 +291,15 @@ def strip(chart):
             out[name] = [
                 {k: v for k, v in e.items() if k != custom_key} if isinstance(e, dict) else e for e in chart[name]
             ]
+    # The environment list went to the sidecar (level 4); the game never reads it.
+    top = chart.get(custom_key)
+    env_key = "_environment" if legacy else "environment"
+    if isinstance(top, dict) and env_key in top:
+        rest = {k: v for k, v in top.items() if k != env_key}
+        if rest:
+            out[custom_key] = rest
+        else:
+            out.pop(custom_key)
     return out
 
 
@@ -239,7 +381,36 @@ def _neutral(fields):
     return (fields["step_mult"], fields["prop_mult"], fields["speed_mult"]) == (1.0, 1.0, 1.0)
 
 
-def _events(chart, legacy, seconds, level=1):
+def fades_agree(rows):
+    """rows: [(value, light ids or None)] of one event type in time order.
+
+    True when, for every event, Chroma's per-light next event (the next one that
+    selects the light or selects no lights) and the game's single next event of
+    the type agree on the fade into a transition (spec 3b, section 4): then the
+    plugin may let selected lights share the game's group tween."""
+    n = len(rows)
+    mentioned = sorted({i for _, ids in rows if ids for i in ids})
+    next_by_id, next_global = {}, None  # earliest later event index
+    for i in range(n - 1, -1, -1):
+        value, ids = rows[i]
+        if value in FADE_CHECKED:
+            game = i + 1 if i + 1 < n else None
+            game_fades = game is not None and rows[game][0] in FADE_VALUES
+            for light in (ids if ids else mentioned + [None]):  # None: a light no event names
+                own = next_global if light is None else min(
+                    (j for j in (next_by_id.get(light), next_global) if j is not None), default=None)
+                own_fades = own is not None and rows[own][0] in FADE_VALUES
+                if own_fades != game_fades or (own_fades and own != game):
+                    return False
+        if ids:
+            for light in ids:
+                next_by_id[light] = i
+        else:
+            next_global = i
+    return True
+
+
+def _events(chart, legacy, seconds, level=1, scene=None):
     if legacy:
         rows = [
             (e.get("_time", 0), e.get("_type"), e.get("_value", 0), _custom(e, True), "_color", "_lightID")
@@ -252,14 +423,33 @@ def _events(chart, legacy, seconds, level=1):
             for e in chart.get("basicBeatmapEvents") or []
         ]
     order = sorted(range(len(rows)), key=lambda i: _number(rows[i][0], "event beat"))  # stable
-    counters, out = {}, []
+    ids_of = {}
     for i in order:
         beat, kind, value, custom, color_key, light_key = rows[i]
         if type(kind) is not int or type(value) is not int:
             raise ValueError("invalid event type or value")
-        counters[kind] = counters.get(kind, 0) + 1
         if light_key in custom:
-            _light_ids(custom[light_key])  # validated, intentionally not written
+            ids_of[i] = _light_ids(custom[light_key])
+    # Level 6: types 0-4 with any lightID get a record for EVERY event (the plugin
+    # pairs live events with records in order at equal times) and the light indices.
+    light_types = set()
+    if level >= 6 and scene is not None:
+        for kind in LIGHT_TYPES & {rows[i][1] for i in ids_of}:
+            sequence = [(rows[i][2], ids_of.get(i)) for i in order if rows[i][1] == kind]
+            if fades_agree(sequence):
+                light_types.add(kind)
+    table = light_table(scene)
+    counters, out = {}, []
+    for i in order:
+        beat, kind, value, custom, color_key, light_key = rows[i]
+        counters[kind] = counters.get(kind, 0) + 1
+        lights = []
+        if kind in light_types and i in ids_of:
+            mapping = table.get(kind + 1, {})
+            for light in ids_of[i]:
+                index = mapping.get(light, light)  # Chroma: no table entry -> the id itself
+                if index not in lights:
+                    lights.append(index)
         flags, fields = _effects(custom, legacy) if level >= 2 else (0, None)
         if color_key in custom:
             flags |= FLAG_COLOR
@@ -267,14 +457,14 @@ def _events(chart, legacy, seconds, level=1):
         if legacy and level >= 3 and custom.get("_lightGradient") is not None:
             gradient = _gradient(custom["_lightGradient"], beat, seconds)
             flags |= FLAG_GRADIENT
-        if flags or (fields and not _neutral(fields)):
+        if flags or (fields and not _neutral(fields)) or kind in light_types:
             record = dict(
                 type=kind,
                 index=counters[kind],
                 time=float(seconds(beat)),
                 value=value,
                 rgba=color(custom[color_key]) if color_key in custom else [0.0, 0.0, 0.0, 0.0],
-                lights=[],
+                lights=lights,
             )
             if level >= 2:
                 record.update(flags=flags, **fields)
@@ -285,8 +475,11 @@ def _events(chart, legacy, seconds, level=1):
     return out
 
 
-def extract(chart, seconds, level=1):
-    """Chroma records of the chart the importer writes; seconds(beat) -> float."""
+def extract(chart, seconds, level=1, scene=None):
+    """Chroma records of the chart the importer writes; seconds(beat) -> float.
+
+    `scene`: the stock environment the game loads for this chart (level 6 maps
+    lightID through its Chroma table); None writes no light indices."""
     legacy = is_v2(chart)
     notes, walls = [], []
 
@@ -322,7 +515,12 @@ def extract(chart, seconds, level=1):
             walls.append(dict(time=start, x=x, y=y, w=w, h=h, duration=end - start, rgba=color(custom[key])))
     notes.sort(key=lambda v: v["time"])
     walls.sort(key=lambda v: v["time"])
-    return {"events": _events(chart, legacy, seconds, level), "notes": notes, "walls": walls}
+    out = {"events": _events(chart, legacy, seconds, level, scene), "notes": notes, "walls": walls}
+    if level >= 4:
+        entries = environment(chart, level)
+        if entries:
+            out["environment"] = entries  # the importer wraps it with the environment name
+    return out
 
 
 def _u8(value, what):
@@ -399,6 +597,52 @@ def _event_v2(e):
     return out
 
 
+def _environment_block(block, version=3):
+    """BSDACHR3/4 environment block: scene name, then entries in file order."""
+    if not block:
+        return struct.pack("<BI", 0, 0)
+    name, entries = block.get("name"), block.get("entries")
+    if (not isinstance(name, str) or not 1 <= len(name) <= MAX_ENV_NAME or not name.isascii()
+            or any(not 0x20 <= ord(c) <= 0x7E for c in name)):
+        raise ValueError("invalid Chroma environment name")
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENV_ENTRIES:
+        raise ValueError("invalid Chroma environment entries")
+    out = bytearray(struct.pack("<B", len(name)) + name.encode("ascii") + struct.pack("<I", len(entries)))
+    for e in entries:
+        method, ident = e.get("method"), e.get("id")
+        if type(method) is not int or not 0 <= method < len(LOOKUP_METHODS):
+            raise ValueError("invalid Chroma environment method")
+        if not isinstance(ident, str) or not 1 <= len(ident) <= MAX_ENV_ID or any(not 0x20 <= ord(c) <= 0x7E for c in ident):
+            raise ValueError("invalid Chroma environment id")
+        if method == 0:
+            additive_chroma_regex.check(ident)
+        fields = 0
+        if "active" in e:
+            if type(e["active"]) is not bool:
+                raise ValueError("invalid Chroma environment active")
+            fields |= ENV_HAS_ACTIVE | (ENV_ACTIVE if e["active"] else 0)
+        values = b""
+        for field in ENV_FIELDS:
+            if field in e:
+                vector = e[field]
+                if not isinstance(vector, (list, tuple)) or len(vector) != 3:
+                    raise ValueError("invalid Chroma environment " + field)
+                fields |= ENV_FIELD_BITS[field]
+                values += b"".join(_real(v, -MAX_ENV_VALUE, MAX_ENV_VALUE, "Chroma environment " + field) for v in vector)
+        copies = b""
+        if "duplicate" in e:
+            count = e["duplicate"]
+            if version < 4 or type(count) is not int or not 1 <= count <= MAX_DUPLICATE:
+                raise ValueError("invalid Chroma environment duplicate")
+            fields |= ENV_DUPLICATE
+            copies = struct.pack("<B", count)
+        if not fields or set(e) - {"method", "id", "active", "duplicate", *ENV_FIELDS}:
+            raise ValueError("invalid Chroma environment entry")
+        raw = ident.encode("ascii")
+        out += struct.pack("<BH", method, len(raw)) + raw + struct.pack("<B", fields) + copies + values
+    return bytes(out)
+
+
 def _chart(item, version=1):
     out = bytearray()
     events, notes, walls = item["events"], item["notes"], item["walls"]
@@ -423,7 +667,7 @@ def _chart(item, version=1):
             raise ValueError("events are not sorted by type, index and time")
         last = (kind, index, e["time"])
         out += struct.pack("<BI", kind, index) + time + struct.pack("<i", e["value"])
-        out += _event_v2(e) if version == 2 else _rgba(e["rgba"])
+        out += _event_v2(e) if version >= 2 else _rgba(e["rgba"])
         out += struct.pack("<H", len(lights)) + b"".join(struct.pack("<H", i) for i in lights)
     out += struct.pack("<I", len(notes))
     previous = 0.0
@@ -445,6 +689,10 @@ def _chart(item, version=1):
         # x/y are signed bytes: decorative walls outside the lanes (x = -1, 4) are legal.
         out += time + struct.pack("<bbBB", _i8(w["x"], "wall x"), _i8(w["y"], "wall y"), _u8(w["w"], "wall w"), _u8(w["h"], "wall h"))
         out += _real(w["duration"], -MAX_TIME, MAX_TIME, "wall duration") + _rgba(w["rgba"])
+    if version >= 3:
+        out += _environment_block(item.get("environment"), version)
+    elif item.get("environment"):
+        raise ValueError("Chroma environment needs a BSDACHR3 sidecar")
     return bytes(out)
 
 
@@ -454,7 +702,9 @@ def encode(level_id, charts):
         raise ValueError("invalid Chroma level ID")
     if not isinstance(charts, list) or not 1 <= len(charts) <= MAX_CHARTS:
         raise ValueError("Chroma sidecar needs 1..25 charts")
-    version = 2 if _v2_needed(charts) else 1
+    blocks = [c.get("environment") for c in charts]
+    copies = any("duplicate" in e for b in blocks if isinstance(b, dict) for e in b.get("entries") or [] if isinstance(e, dict))
+    version = 4 if copies else 3 if any(blocks) else 2 if _v2_needed(charts) else 1
     seen, body = set(), bytearray()
     ident = level_id.encode("ascii")
     body += struct.pack("<I", len(ident)) + ident + struct.pack("<I", len(charts))
@@ -466,9 +716,10 @@ def encode(level_id, charts):
             raise ValueError("duplicate Chroma chart")
         seen.add((mode, difficulty))
         body += bytes([mode, difficulty]) + _chart(item, version)
-    data = (MAGIC_V2 if version == 2 else MAGIC) + struct.pack("<IQ", len(body), checksum(body)) + bytes(body)
+    magic = {1: MAGIC, 2: MAGIC_V2, 3: MAGIC_V3, 4: MAGIC_V4}[version]
+    data = magic + struct.pack("<IQ", len(body), checksum(body)) + bytes(body)
     if len(data) > MAX_BYTES:
-        raise ValueError("Chroma sidecar exceeds 8 MiB")
+        raise ValueError("Chroma sidecar exceeds 16 MiB")
     return data
 
 

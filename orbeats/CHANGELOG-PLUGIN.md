@@ -1,3 +1,148 @@
+## 0.8093 — Chroma lightID: colours of single lights (not verified on PS4)
+
+- Declares `ORB_CHROMA_V6`. A light event whose sidecar record carries light
+  indices changes only those lights of its group (types 0-4); the other lights
+  keep the look they had, including a running fade. An event without lights
+  changes the whole group again, as before.
+- The plugin keeps Chroma's light order per light group: first registration
+  order, never removed, never twice (hook after `LightWithIdManager.RegisterLight`).
+  `SetColorForId` is hooked: while some lights of a group keep their own colour,
+  it does what the game does but skips them. Their fades run on the song clock
+  with the game's `Interpolation.Interpolate`. Lights are called only from the
+  game's live list, through their class's `get_isRegistered`/`ColorWasSet`
+  (MethodInfo name checked); an unknown class or layout switches that group
+  back to whole-group colours.
+- Equal-time light events are paired with sidecar records in order (one lamp
+  per event in lightID maps) instead of all taking the first record.
+- New fingerprints: `SetColorForId`, `Interpolation.Interpolate`. A mismatch
+  leaves lights colouring whole groups. The SDK's detour stub of `SetColorForId`
+  would copy a RIP-relative `cmp`, so the original is reached through a rebuilt
+  20-byte prefix (`chroma_set_color_trampoline`, execution-tested).
+- Log: `lightID group <id>: <n> lights recorded` on the first event of a group,
+  and per level `lightID: events with lights ...` with the light count per group.
+
+## 0.8092 — Chroma sidecar memory outside the game's libc heap (not verified on PS4)
+
+- 0.8091 on PS4 (2026-11-12): stage 5b works. Bad Hatter (FitBeat): 10 of 10
+  entries, `duplicated 2 copies of 2 objects (lights registered 2)`; Clash
+  (BigMirror): 29 of 29 entries, `duplicated 10 copies of 1 objects (lights
+  registered 10)`, 0 refused, no crash. The owner saw the copied tubes where the
+  maps put them and the Chroma colours.
+- Your Reality (34aa3 KDA, 9.7 MiB) was refused as invalid although the same
+  file decodes on the host: the 10 MiB file buffer came from the game's libc
+  heap and the 4.5 MB event array no longer fit, and an allocation failure was
+  reported as an invalid file. The file buffer and the chart arrays now come
+  from anonymous mappings (`sceKernelMmap`, 16 KiB grain) and are unmapped when
+  the level ends.
+- An allocation failure is logged as `out of memory: N bytes ...`, separate from
+  an invalid sidecar.
+
+## 0.8091 — fix: crash when copying environment lights (not verified on PS4)
+
+- 0.8090 on PS4 (2026-11-12): the sidecar was read again (Bad Hatter, 4401
+  events), but the first FitBeat copy logged
+  `LightWithIdMonoBehaviour.RegisterLight threw` and the game crashed soon
+  after. The copy's `_lightManager` was written with `&manager`, while
+  `il2cpp_field_set_value` takes the object itself for a reference field (as
+  `additive_song_packs.h` does), so the copy held a stack address as its light
+  manager. Now the object is written, read back and compared before any
+  registration; a mismatch clears the field and destroys the copy.
+- A copy left half-made by a failing managed call is destroyed
+  (`Object.Destroy`) instead of staying in the scene.
+- Environment log lines name the exception class of a failed managed call.
+
+## 0.8090 — fix: Chroma sidecars were not read on 0.8089 (not verified on PS4)
+
+- 0.8089 on PS4 (2026-11-12, Bad Hatter, Clash, Your Reality): no level opened
+  a Chroma session, so no colours, effects or environment changes ran. The
+  exact-size read took the size from `sceKernelFstat`, but the SDK's
+  `struct stat` is musl's (8-byte `dev_t`/`ino_t`/`nlink_t`), not the PS4
+  kernel's, so `st_size` was read at the wrong offset and every sidecar was
+  dropped silently. The size now comes from `sceKernelLseek(SEEK_END)`; if that
+  fails, the file is read in growing chunks up to 16 MiB as in 0.8088.
+- A sidecar that exists but cannot be read is now logged
+  (`sidecar unreadable ...`) instead of being treated as a map without Chroma.
+- Copies may also carry `Parametric3SliceSpriteController` and
+  `ParametricBoxController` (no injected fields): the 0.8089 dump v2 shows them
+  on the `BakedBloom`/`BoxLight` children of every NeonTube that FitBeat and
+  BigMirror copy, so 0.8089 would have refused those copies.
+
+## 0.8089 — Chroma environment copies (stage 5b), 16 MiB sidecars (not verified on PS4)
+
+- 0.8088 on PS4 (2026-11-12): RATATATA (Monstercat) and Perception Check
+  (Dragons) switched off the objects their maps name (3 and 12 objects) and
+  GradientBackground; no crash. Owner confirmed the logos and constructions
+  are gone.
+- New `ORB_CHROMA_V5` capability and `BSDACHR4` sidecars: a BSDACHR3
+  environment entry may carry field bit 128 followed by a copy count 1-100
+  (Chroma `duplicate`). The bit is refused in BSDACHR3.
+- A copy entry copies each found object with
+  `Object.Internal_CloneSingleWithParent(object, parent, true)` (Chroma's
+  Instantiate + SetParent), so the copy is the parent's last child named
+  `<name>(Clone)`. Its `active` and transform go to the copy only; the copy and
+  its children join the id list, so later entries find them (BigMirror moves
+  `[19]FrontLights.[2..11]NeonTube(Clone)`). Copies made by an entry are not
+  its own targets.
+- Only objects whose MonoBehaviours are all lights are copied
+  (`TubeBloomPrePassLight`, the `...LightWithId` light classes,
+  `MaterialPropertyBlockColorSetter/Controller`): Instantiate does not fill
+  Zenject fields, and every other class with injected fields would run with
+  nulls. The check runs before cloning. A copied `LightWithIdMonoBehaviour`
+  gets the original's `_lightManager` (0x28) and is registered with
+  `RegisterLight()` when it is active (otherwise its own `OnEnable` does it).
+  Refused: scene roots, other classes (named in the log), more than 100 found
+  objects (Chroma stops there), more than 512 copies per level.
+- The environment log line adds `duplicated N copies of M objects (lights
+  registered L), duplicate refused R`, plus one line per refusal (at most 8).
+- Hierarchy dump v2: a fourth column lists each object's MonoBehaviour classes.
+- Sidecar cap raised from 8 to 16 MiB (34aa3 KDA is 9.7 MiB: four identical
+  40k-event light shows). The file is now read into one buffer of its exact
+  size (`sceKernelFstat`); before, the doubling buffer could reach 16 MiB even
+  under the 8 MiB cap.
+
+## 0.8088 — Chroma static environment (stage 5a, not verified on PS4)
+
+- 0.8087 on PS4 (2026-11-12): the hierarchy dump ran on Dragons2, Monstercat,
+  GreenDayGrenade, KDA and FitBeat without a crash; every environment entry of
+  the local Chroma maps on those environments finds its objects in the PS4
+  hierarchy.
+- New `ORB_CHROMA_V4` capability and `BSDACHR3` sidecars: BSDACHR2 records plus,
+  per chart, the map's environment scene name and its entries in file order
+  (lookup method Regex/Exact/Contains/StartsWith/EndsWith, id, `active`,
+  `scale`, `position`/`localPosition`, `rotation`/`localRotation`). Every Regex
+  id must compile in the plugin's regex subset (`additive_chroma_regex.h`,
+  bounded backtracking with a step budget) or the whole sidecar is refused.
+- Two frames after the load of a level with a sidecar, the plugin switches off
+  `Environment/GradientBackground` (as Chroma does for every Chroma map) and,
+  when the loaded environment scene is the map's own, applies each entry to
+  every matching object: `GameObject.SetActive`, `Transform.localScale`,
+  `localPosition` or `position`, `localEulerAngles` or `eulerAngles`. Public
+  Unity methods are called by name through the IL2CPP API, exceptions caught;
+  one log line per level counts entries, objects, changes and misses.
+- On rings (position, rotation) and parametric boxes (scale, position) the parts
+  the game rewrites every frame are skipped and counted (Chroma patches them,
+  stage 5b). Duplicates, geometry, tracks, materials and non-empty components
+  stay refused by the pipeline.
+- Known deviation: a scene root's index is `GetSiblingIndex` (0 on 2.04), not
+  the root-list position Chroma uses; stock environments have a single root.
+- The environment hook now runs without the dump flag; the dump (flag file) is
+  unchanged and its files are made readable over FTP (chmod 0644).
+
+## 0.8087 — Chroma environment hierarchy dump (stage 5.0, diagnostic)
+
+- 0.8086 on PS4 (2026-11-12): light gradients applied on ed9d (279 gradients,
+  0 fallbacks, no crash).
+- New opt-in diagnostic: with the flag file
+  `/data/GoldHEN/AFR/CUSA12878/additive/chroma-env-dump`, 60 frames after every
+  level load (stock levels included) the plugin writes the loaded environment
+  hierarchy to `additive/env-dump/<scene>.txt`: one line per object with
+  Chroma's `FullID` (`Scene.[i]Root.[j]Child`), `activeSelf` and flags (ring,
+  parametric box, light with id), plus a root-order self-check. It changes
+  nothing in the scene.
+- Uses a new fingerprinted hook on `AudioTimeSyncController.Update` (armed only
+  with the flag) and public Unity methods resolved by name through the IL2CPP
+  API, every managed exception caught. Without the flag nothing changes.
+
 ## 0.8086 — Chroma light gradients (stage 4c, not verified on PS4)
 
 - 0.8085 on PS4 (2026-11-12): ring rotation confirmed by the log counter (35766

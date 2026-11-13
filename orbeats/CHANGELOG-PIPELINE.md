@@ -1,3 +1,60 @@
+## 0.5408 — Lightshow, Legacy and Lawless charts are left out, unreleased
+
+- A pack with `Lightshow` (lights only, no notes), `Legacy` (an older version
+  of the map) or `Lawless` sets no longer refuses the whole pack: those charts
+  are left out before any check or conversion, the other sets are installed,
+  and each left-out chart is reported (`Not installed: Lawless/Expert (...)`,
+  `not_installed` in the install result). Their mod flags in BeatSaver
+  metadata no longer block the download. A pack with nothing else is refused
+  and names what was left out. Other unknown characteristics still refuse.
+- Lawless is deferred, not dropped for good: it is playable vanilla content,
+  planned as its own library entry. The opt-in vanilla subset still installs a
+  mod-free Lawless set as Standard when no Standard set remains.
+- V4 packs: the normalizer leaves the charts out and passes the list to the
+  importer (`_orbeatsSkipped`, bounded and checked).
+
+## 0.5407 — Chroma lightID (requires plugin 0.8093), unreleased
+
+- With a plugin that declares `ORB_CHROMA_V6`, `lightID`/`_lightID` of light
+  events of types 0-4 is written to the sidecar as light indices, through
+  Chroma's light-ID table of the chart's stock environment
+  (`tools/chroma_light_id_tables.json`, from Aeroluna/Heck, MIT); without a
+  table entry the id is the index, as in Chroma.
+- In such a type every event gets a record (colourless ones too), so the plugin
+  can pair equal-time events with records in order.
+- A type in which Chroma's per-light fade into a transition (values 4, 8, 12)
+  would differ from the game's group fade keeps whole-group colours. Other
+  types, and environments outside the stock list, keep whole-group colours too.
+- The sidecar format is unchanged (the light list exists since `BSDACHR1`).
+
+## 0.5406 — Chroma environment copies (requires plugin 0.8089), unreleased
+
+- With a plugin that declares `ORB_CHROMA_V5`, environment entries may carry
+  `duplicate` (`_duplicate` in V2), an integer 1-100. Such charts are written
+  as `BSDACHR4`. `lightID`/`_lightID`, `track`, `geometry` and components stay
+  refused.
+- The Chroma sidecar cap is 16 MiB (was 8 MiB); 34aa3 KDA (9.7 MiB) now fits.
+
+## 0.5405 — Chroma static environment (requires plugin 0.8088), unreleased
+
+- With a plugin that declares `ORB_CHROMA_V4`, a chart's `environment`
+  (`_environment` in V2) is accepted when every entry uses only `id`,
+  `lookupMethod`, `active`, `scale`, `position`, `localPosition`, `rotation`,
+  `localRotation`, and in V3 `components.ILightWithId` with only null values
+  (a no-op in Chroma, dropped). The entries go to a `BSDACHR3` sidecar with the
+  difficulty's environment name; V2 positions are converted from lane widths
+  (x 0.6). The list is removed from the bundled chart.
+- Regex ids must be inside the plugin's subset (`tools/additive_chroma_regex.py`
+  mirrors the native grammar and program size). `duplicate`, `lightID`,
+  `geometry`, `track`, other components, `_environmentRemoval` and an
+  environment outside the PS4 stock list still refuse the map.
+- Importer: `_beatmapColorSchemeIdx`/`_environmentNameIdx` copied into a V3
+  chart file (BeatSaver 3dbbe) are dropped instead of refusing the map, and a
+  difficulty without playable objects is skipped before any conversion (a
+  lights-only Easy next to chain charts no longer fails the native path,
+  BeatSaver 34aa3).
+- Installs and the BeatSaver download check accept Chroma levels 1 to 4.
+
 ## 0.5404 — Chroma V2 light gradients (requires plugin 0.8086), unreleased
 
 - With a plugin that declares `ORB_CHROMA_V3`, V2 events may carry

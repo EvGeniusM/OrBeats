@@ -63,7 +63,7 @@ def v2_chart():
     }
 
 
-def make_source(tmp_path, charts, requirements=None, bpm=120):
+def make_source(tmp_path, charts, requirements=None, bpm=120, environment=None):
     source = tmp_path / "source"
     source.mkdir(parents=True)
     with wave.open(str(source / "audio.wav"), "wb") as w:
@@ -82,12 +82,14 @@ def make_source(tmp_path, charts, requirements=None, bpm=120):
     info = {"_version": "2.1.0", "_songName": "Chroma fixture", "_songAuthorName": "Fixture", "_beatsPerMinute": bpm,
             "_songFilename": "audio.wav", "_songTimeOffset": 0,
             "_difficultyBeatmapSets": [{"_beatmapCharacteristicName": "Standard", "_difficultyBeatmaps": diffs}]}
+    if environment:
+        info["_environmentName"] = environment
     (source / "Info.dat").write_text(json.dumps(info))
     return source
 
 
-def run(tmp_path, charts, chroma=True, requirements=None, bpm=120):
-    source = make_source(tmp_path, charts, requirements, bpm)
+def run(tmp_path, charts, chroma=True, requirements=None, bpm=120, environment=None):
+    source = make_source(tmp_path, charts, requirements, bpm, environment)
     out = tmp_path / "normalized"
     return imp.import_song(source, out, ffmpeg=ffmpeg(), chroma=chroma), out
 
@@ -196,3 +198,57 @@ def test_v2_gradient_is_imported_only_for_the_level_three_plugin(tmp_path):
     gradient = next(e for e in report["chroma_charts"][0]["events"] if e["type"] == 2)
     assert gradient["time"] == 3.0 and gradient["gradient"] == dict(start=[1.0, 0.0, 0.0, 1.0], end=[0.0, 0.0, 1.0, 1.0], duration=1.0, easing=6)
     assert "_lightGradient" not in json.dumps(imp.prepare.load_song(out)["maps"])
+
+
+def test_environment_is_imported_only_for_the_level_four_plugin(tmp_path):
+    entries = [{"id": "Tentacle", "lookupMethod": "Contains", "active": False},
+               {"id": r"\[\d+\]Smoke$", "lookupMethod": "Regex", "scale": [2, 2, 2]}]
+    chart = v3_chart(customData={"environment": entries})
+    with pytest.raises(ValueError, match="chart.environment"):
+        run(tmp_path / "level3", {"Expert": chart}, chroma=3, requirements=["Chroma"], environment="KDAEnvironment")
+    report, out = run(tmp_path / "level4", {"Expert": chart}, chroma=4, requirements=["Chroma"], environment="KDAEnvironment")
+    (record,) = report["chroma_charts"]
+    assert record["environment"] == dict(name="KDAEnvironment", entries=[
+        dict(method=2, id="Tentacle", active=False), dict(method=0, id=r"\[\d+\]Smoke$", scale=[2.0, 2.0, 2.0])])
+    song = imp.prepare.load_song(out)
+    assert "Tentacle" not in json.dumps(song["maps"]) and json.loads((out / "Info.dat").read_text())["_environmentName"] == "KDAEnvironment"
+    # The sidecar for this chart is BSDACHR3.
+    import additive_chroma
+    assert additive_chroma.encode("bsd_additive_0123456789abcdef01234567", report["chroma_charts"])[:8] == b"BSDACHR3"
+
+
+def test_environment_copies_are_imported_only_for_the_level_five_plugin(tmp_path):
+    entries = [{"id": r"\[19\]FrontLights\.\[0\]NeonTube$", "lookupMethod": "Regex", "duplicate": 10},
+               {"id": "NeonTube(Clone)", "lookupMethod": "EndsWith", "scale": [2, 1, 2]}]
+    chart = v3_chart(customData={"environment": entries})
+    with pytest.raises(ValueError, match="environment.duplicate"):
+        run(tmp_path / "level4", {"Expert": chart}, chroma=4, requirements=["Chroma"], environment="BigMirrorEnvironment")
+    report, _ = run(tmp_path / "level5", {"Expert": chart}, chroma=5, requirements=["Chroma"], environment="BigMirrorEnvironment")
+    (record,) = report["chroma_charts"]
+    assert record["environment"]["entries"][0] == dict(method=0, id=r"\[19\]FrontLights\.\[0\]NeonTube$", duplicate=10)
+    import additive_chroma
+    assert additive_chroma.encode("bsd_additive_0123456789abcdef01234567", report["chroma_charts"])[:8] == b"BSDACHR4"
+
+
+def test_environment_changes_need_a_stock_environment(tmp_path):
+    chart = v3_chart(customData={"environment": [{"id": "Smoke", "lookupMethod": "Contains", "active": False}]})
+    with pytest.raises(ValueError, match="stock environment"):
+        run(tmp_path / "none", {"Expert": chart}, chroma=4, requirements=["Chroma"])
+    with pytest.raises(ValueError, match="stock environment"):
+        run(tmp_path / "custom", {"Expert": chart}, chroma=4, requirements=["Chroma"], environment="MyCustomEnvironment")
+
+
+def test_info_indices_copied_into_a_chart_are_dropped(tmp_path):
+    # BeatSaver 3dbbe: editors copy _beatmapColorSchemeIdx/_environmentNameIdx into the chart file.
+    chart = v3_chart(_beatmapColorSchemeIdx=0, _environmentNameIdx=0)
+    report, out = run(tmp_path / "ok", {"Expert": chart}, requirements=["Chroma"])
+    assert "_environmentNameIdx" not in json.dumps(imp.prepare.load_song(out)["maps"])
+    with pytest.raises(ValueError, match="copied Info index"):
+        run(tmp_path / "bad", {"Expert": v3_chart(_environmentNameIdx="0")}, requirements=["Chroma"])
+
+
+def test_lights_only_chart_is_skipped_before_any_conversion(tmp_path):
+    lights = {"version": "3.3.0", "basicBeatmapEvents": [{"b": 1, "et": 1, "i": 1, "f": 1, "customData": {"color": [1, 0, 0]}}]}
+    report, _ = run(tmp_path, {"Easy": lights, "Expert": v3_chart()}, requirements=["Chroma"])
+    assert report["skipped_difficulties"] == ["Easy (lighting-only; no playable objects)"]
+    assert [c["difficulty"] for c in report["chroma_charts"]] == [3]

@@ -54,12 +54,13 @@ console.log('metadata presentation verified');
     assert "metadata presentation verified" in result.stdout
 
 
-def test_vanilla_part_is_offered_only_as_an_explicit_choice():
+def test_mod_free_part_is_experimental_installable_and_always_flagged():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node required for executable UI checks")
     source = (ROOT / "webapp/static/companion.js").read_text(encoding="utf-8")
-    helpers = "const escapeHTML=(v)=>String(v);" + source[source.index("function compatibility(map)"):source.index("function votes(")]
+    # chromaCapable is a page global set from the plugin status; default page state is "not capable".
+    helpers = "const escapeHTML=(v)=>String(v);let chromaCapable=false;" + source[source.index("function compatibility(map)"):source.index("function votes(")]
     program = r'''
 const vm=require('vm');const ctx=vm.createContext({});vm.runInContext(JSON.parse(process.argv[1]),ctx);
 vm.runInContext(`
@@ -71,8 +72,8 @@ if(status([{...chart,vivify:null}])!=='likely')throw Error('Null vivify is not m
 if(status([{...chart,vivify:true}])!=='unsupported')throw Error('Vivify alone must block');
 if(status([mod,{...mod,characteristic:'NoArrows'}])!=='unsupported')throw Error('All-mod pack');
 const mixed=compatibility(map([mod,{...mod,characteristic:'NoArrows'},lawless,{...lawless,difficulty:'Easy'}]));
-if(mixed.status!=='subset'||mixed.label!=='Vanilla part')throw Error('Lawless copy beside mod charts');
-if(!mixed.reason.includes('Vivify')||!mixed.reason.includes('2 mod-free charts')||!mixed.reason.includes('on request'))throw Error('Reason');
+if(mixed.status!=='subset'||mixed.label!=='Experimental')throw Error('Lawless copy beside mod charts');
+if(!mixed.reason.includes('Vivify')||!mixed.reason.includes('2 mod-free charts')||!mixed.reason.startsWith('Experimental:'))throw Error('Reason');
 if(status([lawless])!=='subset')throw Error('Lawless-only pack needs the explicit choice');
 if(status([mod,chart])!=='subset')throw Error('Vanilla Standard beside mod chart');
 if(status([mod,{...chart,characteristic:'Lightshow'}])!=='unsupported')throw Error('Lightshow is not playable');
@@ -81,13 +82,23 @@ if(status([mod,{...lawless,requirements:['Chroma']}])!=='unsupported')throw Erro
 if(status([mod,{...lawless,difficulty:'Extreme'}])!=='unsupported')throw Error('Unknown difficulty');
 if(status([mod,{...chart,ne:undefined}])!=='unsupported')throw Error('Incomplete flags are not vanilla');
 if(status([lawless,null])!=='subset')throw Error('Malformed sibling');
-if(!compatibilityBadge(map([mod,lawless])).includes('compatibility-subset'))throw Error('Badge');
+// Lightshow/Legacy/Lawless are left out and named, never a reason to refuse the pack.
+const left=compatibility(map([chart,{...chart,characteristic:'Lightshow'},{...chart,characteristic:'Legacy',ne:true},{...lawless,ne:true}]));
+if(left.status!=='likely'||!left.reason.includes('Not installed: Lightshow charts, Legacy charts, Lawless charts'))throw Error('Left-out charts: '+left.reason);
+if(status([{...chart,characteristic:'Lightshow'},{...chart,characteristic:'Legacy'}])!=='unsupported')throw Error('Nothing playable');
+const badge=compatibilityBadge(map([mod,lawless]));
+if(!badge.includes('compatibility-subset')||!badge.includes('! Experimental'))throw Error('Badge');
 `,ctx);
 console.log('vanilla part verified');
 '''
     result = subprocess.run([node, "-e", program, json.dumps(helpers)], text=True, capture_output=True, check=True, encoding="utf-8")
     assert "vanilla part verified" in result.stdout
-    # The plain button never installs a partial pack; the request carries an explicit flag.
+    # An experimental pack is installable; the request always carries the explicit flag,
+    # so the host never applies the subset to a pack the UI did not label.
+    assert "Add vanilla part" not in source and "Install only the vanilla part?" not in source
+    css = (ROOT / "webapp/static/companion.css").read_text(encoding="utf-8")
+    unknown = css[css.index(".compatibility-unknown {"):].split("}")[0].split("{")[1]
+    assert css[css.index(".compatibility-subset {"):].split("}")[0].split("{")[1] == unknown  # same yellow
     assert 'check.status === "subset" && !subset' in source
     assert "...(subset ? { vanilla_subset: true } : {})" in source
     assert 'data-subset="${c.status === "subset"}"' in source

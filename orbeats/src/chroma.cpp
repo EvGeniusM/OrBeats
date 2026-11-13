@@ -1,4 +1,5 @@
-// Chroma levels 1-3 (colours; rings and lasers; light gradients) for CUSA12878 2.04.
+// Chroma levels 1-4 (colours; rings and lasers; light gradients; static
+// environment, stage 5a in src/chroma_env.cpp) for CUSA12878 2.04.
 // See docs: native-map-expansion.md, docs/plans/*chroma-stage4*.
 //
 // Rules this file keeps:
@@ -10,7 +11,13 @@
 //  * a light gradient calls one game function the game itself calls for every
 //    transition event (TweeningManager.AddTweenToDataStructures, fingerprinted;
 //    it may grow the manager's own lists, as it does for the game);
+//  * per-light colours (stage 3b) call, on lights taken from the game's own live
+//    list only, the two methods the game's SetColorForId calls (isRegistered,
+//    ColorWasSet) plus get_lightId on registration, through the MethodInfo of the
+//    light's class (name checked), and the pure Interpolation.Interpolate;
 //  * otherwise only verified field reads and writes of plain numbers;
+//  * the environment (stage 5a) is changed once per level, two frames after the
+//    load, through public Unity methods called by name (exceptions caught);
 //  * without an active sidecar every hook goes straight to the game's code;
 //  * a layout surprise at run time disables Chroma for the rest of the process.
 // NOT hardware-verified until docs/map-hardware-test-matrix.md says so.
@@ -24,6 +31,8 @@
 #include "additive_chroma_session.h"
 #include "additive_chroma_trampoline.h"
 #include "additive_chroma_effects.h"
+#include "additive_chroma_env.h"
+#include "additive_chroma_lights.h"
 
 namespace BsdAdditive {
 namespace {
@@ -53,6 +62,15 @@ static const CodeSpec kCode[kHookCount] = {
 };
 // Called (never patched) for light gradients.
 static const CodeSpec kAddTween = {0x2814200, 0x1b0, UINT64_C(0xd6cb1c5d610caa0a)};  // TweeningManager.AddTweenToDataStructures
+// Stage 5: the frame clock for the environment (5a apply, 5.0 dump with the flag file).
+static const CodeSpec kTimeUpdate = {0x1b3e500, 0xe40, UINT64_C(0x6e8d1d45af2d95f1)};  // AudioTimeSyncController.Update
+// Stage 3b (lightID): patched, and called for own lights' fades (pure maths).
+static const CodeSpec kSetColor = {0x19a21e0, 0x1f1, UINT64_C(0x0b4ef09031439a12)};  // LightWithIdManager.SetColorForId
+static const CodeSpec kInterpolate = {0x2811650, 0x9f0, UINT64_C(0x96bbdcd27d0c4e9d)};  // Tweening.Interpolation.Interpolate
+static const char kEnvDumpFlag[] = "/data/GoldHEN/AFR/CUSA12878/additive/chroma-env-dump";
+static const char kEnvDumpFolder[] = "/data/GoldHEN/AFR/CUSA12878/additive/env-dump/";
+static const int kEnvApplyFrame = 2;   // Chroma: end of the first frame after the spawn controller started
+static const int kEnvDumpFrame = 60;   // frames after the level load: the rings exist by then
 static const char kFolder[] = "/data/GoldHEN/AFR/CUSA12878/additive/";
 static const char kDiagnosticFlag[] = "/data/GoldHEN/AFR/CUSA12878/additive/chroma-diagnostic";
 static const char* const kModes[5] = {"Standard", "OneSaber", "NoArrows", "90Degree", "360Degree"};
@@ -65,7 +83,7 @@ static const Api* g_api = NULL;
 static void (*g_log)(const char*) = NULL;
 static ChromaSession g_session;
 static bool g_installed = false, g_broken = false, g_diagnostic = false;
-static unsigned char* g_page = NULL;            // relocated prefixes: +0 normal, +64 highlight, +128 async load
+static unsigned char* g_page = NULL;            // relocated prefixes: +0 normal, +64 highlight, +128 async load, +192 SetColorForId
 static const size_t kPageBytes = 4096;
 static int g_diag_events = 0, g_diag_lights = 0;
 // Classes whose field offsets were confirmed through the IL2CPP API.
@@ -76,11 +94,27 @@ static void *g_setup_class, *g_characteristic_class, *g_event_class, *g_manager_
 static bool g_effects = false;   // stage-4 hooks armed
 static bool g_gradients = false;   // stage 4c: AddTweenToDataStructures fingerprint matched
 static uintptr_t g_base = 0;
+static Detour g_env_detour; static bool g_env_hooked = false, g_env_dump = false;
+static int g_env_frames = -1;   // -1 idle; counts Update calls after a level load
+static ChromaEnvHost g_env_host;
+// Stage 3b: armed when SetColorForId, RegisterLight and Interpolate match and the clock hook is in.
+static bool g_lights = false, g_lights_level = false;   // level: the sidecar carries light indices
+static Detour g_set_color_detour; static bool g_set_color_hooked = false;
+static LightEase g_ease = NULL;
+static const int kLightGroups = 16;   // the menu's manager may register lights during a level too
+static LightGroup g_groups[kLightGroups]; static int g_group_count = 0;
+static bool g_group_logged[kLightGroups], g_group_off[kLightGroups];
+static uintptr_t* g_light_keys = NULL; static LightState* g_light_states = NULL;   // kLightGroups * kLightGroupMax, mapped once
+static void* g_level_clock = NULL; static bool g_clock_pending = false;   // this level's AudioTimeSyncController
+struct LightStats { unsigned events, selected, outside, global, mismatch, refused; };
+static LightStats g_lstats;
+static void* g_claimed_event = NULL; static ChromaEvent* g_claimed_record = NULL;   // last light event and its record
 
 static void say(const char* text) { if (g_log) g_log(text); }
+static void chroma_release(void* block);   // sidecar memory, below
 static void broken(const char* what) {
     if (g_broken) return;
-    g_broken = true; g_session.end(free);
+    g_broken = true; g_session.end(chroma_release); g_lights_level = false;   // own lights: the game's path again
     char line[160]; snprintf(line, sizeof(line), "[CHROMA] disabled for this run: unexpected %s", what); say(line);
 }
 struct FieldSpec { const char* name; size_t offset; };
@@ -116,21 +150,49 @@ static bool ascii(void* text, char* out, size_t size) {
     for (int32_t i = 0; i < count; ++i) { if (chars[i] < 32 || chars[i] > 126) return false; out[i] = (char)chars[i]; }
     out[count] = 0; return true;
 }
-static unsigned char* read_file(const char* path, size_t& size) {
-    size = 0; int fd = sceKernelOpen(path, O_RDONLY, 0);
+// Sidecar memory (file buffer and the chart arrays) comes from anonymous mappings, not
+// the game's libc heap: on 0.8091 the heap gave the 10 MiB KDA file but not its
+// 4.5 MB of events, so the decoder reported the map as invalid (HW13).
+static const size_t kMapGrain = 16384, kMapHeader = 16;
+static size_t g_failed_bytes = 0;   // last refused request, for the log
+static void* chroma_alloc(size_t n) {
+    if (n > kChromaMaxBytes * 8) { g_failed_bytes = n; return NULL; }
+    const size_t total = (n + kMapHeader + kMapGrain - 1) / kMapGrain * kMapGrain;
+    void* p = NULL;
+    if (sceKernelMmap(NULL, total, 3, 0x1002, -1, 0, &p) < 0 || !p) { g_failed_bytes = n; return NULL; }   // RW, MAP_PRIVATE | MAP_ANON
+    *(size_t*)p = total;
+    return (char*)p + kMapHeader;
+}
+static void chroma_release(void* q) {
+    if (!q) return;
+    char* p = (char*)q - kMapHeader;
+    sceKernelMunmap(p, *(size_t*)p);
+}
+// `opened` tells a missing sidecar (an ordinary map) from one that could not be read.
+static unsigned char* read_file(const char* path, size_t& size, bool& opened) {
+    size = 0; opened = false; int fd = sceKernelOpen(path, O_RDONLY, 0);
     if (fd < 0) return NULL;
-    size_t capacity = 65536; unsigned char* bytes = (unsigned char*)malloc(capacity); int64_t n = 0;
+    opened = true;
+    // Exact size (one buffer, no doubling): the file is held only while it is decoded.
+    // Not sceKernelFstat: the SDK's struct stat is musl's (8-byte dev/ino/nlink), not the
+    // kernel's, so st_size sat at the wrong offset (0.8089 on PS4 read no sidecar at all).
+    const int64_t end = sceKernelLseek(fd, 0, SEEK_END);
+    const bool sized = end > 0 && (uint64_t)end <= kChromaMaxBytes && sceKernelLseek(fd, 0, SEEK_SET) == 0;
+    if (!sized && end > 0 && (uint64_t)end > kChromaMaxBytes) { sceKernelClose(fd); return NULL; }   // too large: refuse unread
+    if (!sized && sceKernelLseek(fd, 0, SEEK_SET) != 0) { sceKernelClose(fd); return NULL; }
+    // Without a size: grow in chunks up to the cap (the 0.8088 path).
+    size_t capacity = sized ? (size_t)end + 1 : 65536;   // one spare byte: a file that grew reads past `end`
+    unsigned char* bytes = (unsigned char*)chroma_alloc(capacity); int64_t n = 0;
     while (bytes && (n = sceKernelRead(fd, bytes + size, capacity - size)) > 0) {
         size += (size_t)n;
-        if (size == capacity) {
-            if (capacity > kChromaMaxBytes) { n = -1; break; }   // larger than any valid sidecar
-            capacity *= 2; unsigned char* grown = (unsigned char*)realloc(bytes, capacity);
-            if (!grown) { n = -1; break; }
-            bytes = grown;
-        }
+        if (size < capacity) continue;
+        if (sized || capacity > kChromaMaxBytes) { n = -1; break; }
+        unsigned char* grown = (unsigned char*)chroma_alloc(capacity * 2);
+        if (!grown) { n = -1; break; }
+        memcpy(grown, bytes, size); chroma_release(bytes); bytes = grown; capacity *= 2;
     }
     sceKernelClose(fd);
-    if (!bytes || n < 0) { free(bytes); size = 0; return NULL; }
+    if (!bytes || n < 0 || !size || size > kChromaMaxBytes || (sized && size != (size_t)end)) { chroma_release(bytes); size = 0; return NULL; }
     return bytes;
 }
 static void reset_effect_state();
@@ -139,7 +201,19 @@ static void reset_effect_state();
 struct EffectStats { unsigned ring, ring_filtered, ring_fallback, step, step_fallback, pair, pair_fallback, single, single_fallback,
                      gradient, gradient_off, gradient_fallback; bool first[5]; };
 static EffectStats g_stats; static char g_level[40];
+static void report_lights() {
+    const LightStats& l = g_lstats;
+    if (!g_level[0] || !(l.events | l.global | l.mismatch | l.refused)) return;
+    char line[320];
+    int n = snprintf(line, sizeof(line), "[CHROMA] level %s lightID: events with lights %u (lights selected %u, outside the group %u), "
+                     "events for every light %u, not applied (group or layout) %u, lights not recorded (group full) %u; groups", g_level, l.events,
+                     l.selected, l.outside, l.global, l.mismatch, l.refused);
+    for (int i = 0; i < g_group_count && n > 0 && (size_t)n < sizeof(line); ++i)
+        n += snprintf(line + n, sizeof(line) - (size_t)n, " %d:%u", (int)g_groups[i].id, (unsigned)g_groups[i].count);
+    say(line);
+}
 static void report_effects() {
+    report_lights();
     const EffectStats& t = g_stats;
     if (!g_level[0] || !(t.ring | t.ring_filtered | t.ring_fallback | t.step | t.step_fallback | t.pair | t.pair_fallback | t.single | t.single_fallback |
                          t.gradient | t.gradient_off | t.gradient_fallback)) return;
@@ -156,8 +230,11 @@ static void first_use(int kind, const char* text) {
     char line[224]; snprintf(line, sizeof(line), "[CHROMA] first %s", text); say(line);
 }
 static void start_level(void* setup) {
+    if (g_env_hooked) g_env_frames = 0;   // every level: the dump runs on stock ones too
     report_effects(); memset(&g_stats, 0, sizeof(g_stats)); g_level[0] = 0;
-    g_session.end(free); g_diag_events = 0; g_diag_lights = 0; reset_effect_state();
+    memset(&g_lstats, 0, sizeof(g_lstats)); g_group_count = 0; g_lights_level = false; g_level_clock = NULL; g_clock_pending = true;
+    g_claimed_event = NULL; g_claimed_record = NULL;
+    g_session.end(chroma_release); g_diag_events = 0; g_diag_lights = 0; reset_effect_state();
     if (g_broken || !setup) return;
     static const FieldSpec setup_fields[] = {{"beatmapKey", 0x10}};
     if (!confirm(g_setup_class, g_api->object_get_class(setup), "GameplayCoreSceneSetupData", setup_fields, 1)) return;
@@ -173,15 +250,34 @@ static void start_level(void* setup) {
     if (g_diagnostic) { snprintf(line, sizeof(line), "[CHROMA DIAG] level id=%s mode=%d difficulty=%d", id, mode, key.difficulty); say(line); return; }
     if (mode < 0) return;
     char path[160]; snprintf(path, sizeof(path), "%s%s-chroma.bin", kFolder, id);
-    size_t size = 0; unsigned char* bytes = read_file(path, size);
-    if (!bytes) return;   // no sidecar: an ordinary map
-    ChromaChart chart; ChromaDecode result = chroma_decode(bytes, size, id, (uint8_t)mode, (uint8_t)key.difficulty, chart, malloc, free);
-    free(bytes);
+    g_failed_bytes = 0;
+    size_t size = 0; bool opened = false; unsigned char* bytes = read_file(path, size, opened);
+    if (!bytes) {   // no sidecar: an ordinary map; an unreadable one is logged
+        if (opened && g_failed_bytes) { snprintf(line, sizeof(line), "[CHROMA] id=%s out of memory: %lu bytes for the sidecar; level runs without Chroma", id, (unsigned long)g_failed_bytes); say(line); }
+        else if (opened) { snprintf(line, sizeof(line), "[CHROMA] id=%s sidecar unreadable (empty, over 16 MiB or read error); level runs without Chroma", id); say(line); }
+        return;
+    }
+    ChromaChart chart; ChromaDecode result = chroma_decode(bytes, size, id, (uint8_t)mode, (uint8_t)key.difficulty, chart, chroma_alloc, chroma_release);
+    chroma_release(bytes);
+    if (result == ChromaInvalid && g_failed_bytes) {
+        snprintf(line, sizeof(line), "[CHROMA] id=%s out of memory: %lu bytes for the chart (sidecar %lu bytes); level runs without Chroma",
+                 id, (unsigned long)g_failed_bytes, (unsigned long)size);
+        say(line); return;
+    }
     if (result == ChromaInvalid) { snprintf(line, sizeof(line), "[CHROMA] id=%s sidecar refused (size=%lu); level runs without Chroma", id, (unsigned long)size); say(line); return; }
     if (result == ChromaNoChart) return;
     g_session.begin(chart); memcpy(g_level, id, sizeof(g_level) - 1); g_level[sizeof(g_level) - 1] = 0;
-    snprintf(line, sizeof(line), "[CHROMA] id=%s mode=%s difficulty=%d events=%u notes=%u walls=%u", id, kModes[mode], key.difficulty,
-             chart.event_count, chart.note_count, chart.wall_count);
+    if (g_lights && chart.light_id_count && !g_light_keys) {   // once per process, kept for later levels
+        g_light_keys = (uintptr_t*)chroma_alloc(sizeof(uintptr_t) * kLightGroups * kLightGroupMax);
+        g_light_states = (LightState*)chroma_alloc(sizeof(LightState) * kLightGroups * kLightGroupMax);
+        if (!g_light_keys || !g_light_states) {
+            chroma_release(g_light_keys); chroma_release(g_light_states); g_light_keys = NULL; g_light_states = NULL; g_lights = false;
+            say("[CHROMA] lightID memory unavailable; lights colour whole groups for this run");
+        }
+    }
+    g_lights_level = g_lights && chart.light_id_count && g_light_keys;
+    snprintf(line, sizeof(line), "[CHROMA] id=%s mode=%s difficulty=%d events=%u notes=%u walls=%u light ids=%u%s", id, kModes[mode], key.difficulty,
+             chart.event_count, chart.note_count, chart.wall_count, chart.light_id_count, g_lights_level ? " (per light)" : "");
     say(line);
 }
 static void load_hook(void* self, const void* method) {
@@ -199,25 +295,39 @@ static bool basic_event(void* event) {
         {"<sameTypeIndex>k__BackingField", 0x30}, {"basicBeatmapEventType", 0x34}, {"value", 0x38}, {"floatValue", 0x3c}};
     return event && confirm(g_event_class, g_api->object_get_class(event), "BasicBeatmapEventData", fields, 6);
 }
-static const float* event_color(void* event) {
+// The record of a live light event. `take` claims it (stage 3b: equal-time events
+// pair with records in order); looking ahead at a next event claims nothing.
+static ChromaEvent* event_record(void* event, bool take) {
     if (!g_session.active || !basic_event(event)) return NULL;
     int32_t type = peek<int32_t>(event, 0x34);
     if (type < 0 || type > 255) return NULL;
-    return g_session.event_color((uint8_t)type, peek<float>(event, 0x10), peek<int32_t>(event, 0x38));
+    return g_session.record((uint8_t)type, peek<float>(event, 0x10), peek<int32_t>(event, 0x38), take);
 }
-static void apply_gradient(void* self, void* event);
+// The event the hooked handler is running and the record it claimed (CheckNextEventForFade runs inside it).
+static void* g_current_event = NULL; static ChromaEvent* g_current_record = NULL;
+static void apply_gradient(void* self, void* event, const ChromaEvent* rec);
+static void lights_before(void* self, void* event, const ChromaEvent* rec);
+// Several LightSwitchEventEffects may handle one event (one per light group of the
+// type): the callbacks run back to back, so the second one reuses the first claim.
 static void light_hook(void* self, void* event, const void* method) {
+    ChromaEvent* rec = g_session.active && event && event == g_claimed_event ? g_claimed_record : event_record(event, true);
+    g_claimed_event = event; g_claimed_record = rec;
+    if (g_lights_level && g_session.active && basic_event(event)) lights_before(self, event, rec);
     {
-        ChromaLightScope scope(g_session, event_color(event), NULL, 0);
+        void* saved_event = g_current_event; ChromaEvent* saved_record = g_current_record;
+        g_current_event = event; g_current_record = rec;
+        ChromaLightScope scope(g_session, ChromaSession::color_of(rec), NULL, 0);
         Detour_Stub(&g_detours[kLight], void (*)(void*, void*, const void*), self, event, method);
+        g_current_event = saved_event; g_current_record = saved_record;
     }
-    if (g_gradients && g_session.active) apply_gradient(self, event);
+    if (g_gradients && rec) apply_gradient(self, event, rec);
 }
 // The game asks GetNormalColor for the NEXT same-type event twice, then for the
 // current event (verified by this function's fingerprint).
 static void fade_hook(void* self, void* event, const void* method) {
-    const float* current = event_color(event);
-    const float* next = g_session.active && basic_event(event) ? event_color(peek<void*>(event, 0x28)) : NULL;
+    const ChromaEvent* own = event && event == g_current_event ? g_current_record : event_record(event, false);
+    const float* current = ChromaSession::color_of(own);
+    const float* next = g_session.active && basic_event(event) ? ChromaSession::color_of(event_record(peek<void*>(event, 0x28), false)) : NULL;
     ChromaLightScope scope(g_session, current, next, 2);
     Detour_Stub(&g_detours[kFade], void (*)(void*, void*, const void*), self, event, method);
 }
@@ -464,15 +574,14 @@ static bool tween_ok(void* tween, void* manager) {
     if (!tween || !manager || g_tween_bad) return false;
     void* klass = g_api->object_get_class(tween); void* manager_class = g_api->object_get_class(manager);
     if (g_tween_class) return klass == g_tween_class && manager_class == g_tween_manager_class;
-    static const FieldSpec fields[] = {{"_startTime", 0x2c}, {"_duration", 0x30}, {"_loop", 0x34}, {"_isStarted", 0x3c},
+    static const FieldSpec fields[] = {{"_startTime", 0x2c}, {"_duration", 0x30}, {"_loop", 0x34}, {"_delay", 0x38}, {"_isStarted", 0x3c},
         {"_isKilled", 0x3d}, {"_easeType", 0x40}, {"fromValue", 0x48}, {"toValue", 0x58}};
     bool ok = tweening_class(klass, "ColorTween") && tweening_class(manager_class, "SongTimeTweeningManager");
     for (size_t i = 0; ok && i < sizeof(fields) / sizeof(fields[0]); ++i) ok = field(*g_api, klass, fields[i].name, fields[i].offset) != NULL;
     if (!ok) { g_tween_bad = true; say("[CHROMA] ColorTween layout differs from 2.04; light gradients off for this run, colours unchanged"); return false; }
     g_tween_class = klass; g_tween_manager_class = manager_class; return true;
 }
-static void apply_gradient(void* self, void* event) {
-    const ChromaEvent* rec = effect_record(event);
+static void apply_gradient(void* self, void* event, const ChromaEvent* rec) {
     if (!rec || !(rec->flags & kChromaGradient)) return;
     ChromaGradientPlan plan = chroma_gradient_plan(*rec, peek<int32_t>(event, 0x38), peek<float>(event, 0x10));
     if (!plan.apply) { ++g_stats.gradient_off; return; }
@@ -491,6 +600,161 @@ static void apply_gradient(void* self, void* event) {
                              (double)plan.duration, plan.ease, (double)plan.from[0], (double)plan.from[1], (double)plan.from[2], (double)plan.to[0],
                              (double)plan.to[1], (double)plan.to[2]);
     first_use(4, text);
+}
+
+// ── per-light colours (stage 3b, lightID) ───────────────────────────────────
+// Lights are called the way the game's SetColorForId calls them (isRegistered,
+// then ColorWasSet), through the methods of their class. The MethodInfo name is
+// compared before its code pointer is used; an unknown class switches its group
+// back to whole-group colours.
+struct LightClass { void* klass; bool ok; void* registered; const void* registered_mi; void* id; const void* id_mi; void* set; const void* set_mi; };
+static LightClass g_light_classes[32]; static size_t g_light_class_count = 0;
+static bool light_method(void* klass, const char* name, int args, void*& code, const void*& info) {
+    info = g_api->class_get_method_from_name(klass, name, args);   // searches base classes
+    if (!info) return false;
+    const char* actual = peek<const char*>((void*)info, 0x18);    // MethodInfo: methodPointer 0x0, name 0x18 (metadata v31)
+    code = peek<void*>((void*)info, 0x0);
+    return code && actual && !strcmp(actual, name);
+}
+static const LightClass* light_class(void* light) {
+    void* klass = light ? g_api->object_get_class(light) : NULL;
+    if (!klass) return NULL;
+    for (size_t i = 0; i < g_light_class_count; ++i) if (g_light_classes[i].klass == klass) return g_light_classes[i].ok ? &g_light_classes[i] : NULL;
+    if (g_light_class_count == 32) return NULL;
+    LightClass& c = g_light_classes[g_light_class_count++]; memset(&c, 0, sizeof(c)); c.klass = klass;
+    c.ok = light_method(klass, "get_isRegistered", 0, c.registered, c.registered_mi) && light_method(klass, "get_lightId", 0, c.id, c.id_mi) &&
+           light_method(klass, "ColorWasSet", 1, c.set, c.set_mi);
+    if (!c.ok) { const char* n = g_api->class_get_name(klass); char line[160]; snprintf(line, sizeof(line), "[CHROMA] lightID: light class %s not callable; its group colours as a whole", n ? n : "?"); say(line); }
+    return c.ok ? &c : NULL;
+}
+static bool light_registered(const LightClass& c, void* light) { return ((bool (*)(void*, const void*))c.registered)(light, c.registered_mi); }
+static void light_set(const LightClass& c, void* light, Color color) { ((void (*)(void*, Color, const void*))c.set)(light, color, c.set_mi); }
+// LightWithIdManager: _lights 0x28 (List<ILightWithId>[]), _colors 0x30 (Nullable<Color>[], 20-byte elements), changed flag 0x40.
+static void* g_lights_manager_class = NULL;
+static bool lights_manager(void* manager) {
+    static const FieldSpec fields[] = {{"_lights", 0x28}, {"_colors", 0x30}, {"_didChangeSomeColorsThisFrame", 0x40}};
+    return manager && confirm(g_lights_manager_class, g_api->object_get_class(manager), "LightWithIdManager", fields, 3);
+}
+static bool live_list(void* manager, int32_t id, void**& items, int32_t& size) {
+    void* groups = peek<void*>(manager, 0x28);
+    if (!groups || id < 0 || (uintptr_t)id >= g_api->array_length(groups)) return false;
+    void* list = peek<void*>(groups, 0x20 + (size_t)id * 8);
+    if (!list_ok(list)) return false;
+    void* array = peek<void*>(list, 0x10); size = peek<int32_t>(list, 0x18);
+    if (!array || size < 0 || (uintptr_t)size > g_api->array_length(array)) return false;
+    items = (void**)((char*)array + 0x20); return true;
+}
+static int group_index(void* manager, int32_t id) {
+    for (int i = 0; i < g_group_count; ++i) if (g_groups[i].manager == (uintptr_t)manager && g_groups[i].id == id) return i;
+    return -1;
+}
+// The group of (manager, lightsID), created on first use with what the live list already holds.
+static int group_for(void* manager, int32_t id) {
+    int i = group_index(manager, id);
+    if (i >= 0 || g_group_count == kLightGroups || !lights_manager(manager)) return i;
+    i = g_group_count++;
+    light_group_init(g_groups[i], (uintptr_t)manager, id, g_light_keys + (size_t)i * kLightGroupMax, g_light_states + (size_t)i * kLightGroupMax);
+    g_group_logged[i] = false; g_group_off[i] = false;
+    void** items; int32_t size;
+    if (live_list(manager, id, items, size)) for (int32_t k = 0; k < size; ++k) if (!light_record(g_groups[i], (uintptr_t)items[k])) ++g_lstats.refused;
+    return i;
+}
+static void lights_register_hook(void* self, void* light, const void* method) {
+    Detour_Stub(&g_detours[kRegister], void (*)(void*, void*, const void*), self, light, method);
+    if (!g_lights_level || !self || !light) return;
+    const LightClass* c = light_class(light);
+    if (!c) return;
+    const int32_t id = ((int32_t (*)(void*, const void*))c->id)(light, c->id_mi);
+    if (id < 1 || id > 5) return;   // lightsID of the light types 0-4
+    const int i = group_index(self, id) >= 0 ? group_index(self, id) : group_for(self, id);
+    if (i >= 0 && !light_record(g_groups[i], (uintptr_t)light)) ++g_lstats.refused;
+}
+// What the game does, except that lights keeping their own colour are skipped.
+static void set_color_hook(void* self, int32_t id, Color color, const void* method) {
+    typedef void (*Fn)(void*, int32_t, Color, const void*);
+    const int i = g_lights_level ? group_index(self, id) : -1;
+    if (i < 0 || !g_groups[i].own || g_group_off[i]) { ((Fn)(g_page + 192))(self, id, color, method); return; }
+    LightGroup& g = g_groups[i];
+    void* colors = peek<void*>(self, 0x30); void** items; int32_t size;
+    if (!colors || (uintptr_t)id >= g_api->array_length(colors) || !live_list(self, id, items, size)) {
+        ++g_lstats.mismatch; g_group_off[i] = true; light_all_follow(g); ((Fn)(g_page + 192))(self, id, color, method); return;
+    }
+    char* slot = (char*)colors + 0x20 + (size_t)id * 20;
+    slot[0] = 1; slot[1] = slot[2] = slot[3] = 0; memcpy(slot + 4, &color, sizeof(color));   // Nullable<Color>: hasValue, padding, value
+    poke<uint8_t>(self, 0x40, 1);
+    for (int32_t k = 0; k < size; ++k) {
+        void* light = items[k];
+        const int index = light_find(g, (uintptr_t)light);
+        if (index >= 0 && g.state[index].mode != kLightFollow) continue;
+        const LightClass* c = light_class(light);
+        if (!c) { g_group_off[i] = true; light_all_follow(g); continue; }   // later calls take the game's path
+        if (light_registered(*c, light)) light_set(*c, light, color);
+    }
+}
+// LightSwitchEventEffect, with its own cache (the gradient cache confirms fewer fields).
+static void* g_switch_lights_class = NULL;
+// Right before the game handles a light event: followers the event does not select
+// keep the group's current look; an event without lights makes every light follow.
+static void lights_before(void* self, void* event, const ChromaEvent* rec) {
+    static const FieldSpec fields[] = {{"_lightsID", 0x68}, {"_event", 0x6c}, {"_lightManager", 0x70}, {"_tweeningManager", 0x80}, {"_colorTween", 0x90}};
+    if (!confirm(g_switch_lights_class, g_api->object_get_class(self), "LightSwitchEventEffect", fields, 5)) { if (rec && rec->lights) ++g_lstats.mismatch; return; }
+    const int32_t id = peek<int32_t>(self, 0x68), type = peek<int32_t>(self, 0x6c);
+    void* manager = peek<void*>(self, 0x70);
+    const bool lit = rec && rec->lights;
+    if (type < 0 || type > 4 || id != type + 1) { if (lit) ++g_lstats.mismatch; return; }   // the host mapped type t to lightsID t + 1
+    const int i = lit ? group_for(manager, id) : group_index(manager, id);
+    if (i < 0) { if (lit) ++g_lstats.mismatch; return; }
+    LightGroup& g = g_groups[i];
+    if (g_group_off[i]) { if (lit) ++g_lstats.mismatch; return; }
+    if (!lit) { if (g.own) { light_all_follow(g); ++g_lstats.global; } return; }
+    if (!g_group_logged[i]) {
+        g_group_logged[i] = true;
+        char line[160]; snprintf(line, sizeof(line), "[CHROMA] lightID group %d: %u lights recorded", (int)id, (unsigned)g.count); say(line);
+    }
+    GroupLook look; memset(&look, 0, sizeof(look));
+    void* tween = peek<void*>(self, 0x90); void* tweens = peek<void*>(self, 0x80);
+    const float now = peek<float>(event, 0x10);
+    if (tween_ok(tween, tweens)) {
+        LightTween t; memcpy(t.from, (char*)tween + 0x48, 16); memcpy(t.to, (char*)tween + 0x58, 16);
+        t.start = peek<float>(tween, 0x2c); t.duration = peek<float>(tween, 0x30); t.delay = peek<float>(tween, 0x38); t.ease = peek<int32_t>(tween, 0x40);
+        look.running = !peek<uint8_t>(tween, 0x3d) && !peek<uint8_t>(tween, 0x34) && t.duration > 0.0f && now - t.start < t.duration + t.delay;
+        if (look.running) look.tween = t;
+    }
+    if (!look.running) {
+        void* colors = peek<void*>(manager, 0x30);
+        if (colors && (uintptr_t)id < g_api->array_length(colors)) {
+            const char* slot = (const char*)colors + 0x20 + (size_t)id * 20;
+            if (slot[0]) memcpy(look.color, slot + 4, 16);   // no value yet: Color.clear, as RegisterLight paints it
+        }
+    }
+    ++g_lstats.events; g_lstats.selected += rec->lights;
+    g_lstats.outside += light_select(g, g_session.chart.light_ids + rec->lights_at, rec->lights, look);
+}
+// Every frame of this level: own lights with a running fade get the game's tween colour.
+static void lights_tick(float now) {
+    for (int i = 0; i < g_group_count; ++i) {
+        LightGroup& g = g_groups[i];
+        if (!g.running || g_group_off[i]) continue;
+        void* manager = (void*)g.manager; void** items; int32_t size;
+        if (!live_list(manager, g.id, items, size)) continue;
+        for (int32_t k = 0; k < size; ++k) {
+            void* light = items[k];
+            const int index = light_find(g, (uintptr_t)light);
+            if (index < 0 || g.state[index].mode != kLightTween) continue;
+            float c[4]; light_own_color(g.state[index], now, g_ease, c);
+            const LightClass* lc = light_class(light);
+            if (lc && light_registered(*lc, light)) { Color color = {c[0], c[1], c[2], c[3]}; light_set(*lc, light, color); }
+        }
+        for (uint16_t s = 0; s < g.count; ++s)   // fades of lights outside the live list (switched off) end too
+            if (g.state[s].mode == kLightTween && light_tween_done(g.state[s].tween, now)) g.state[s].mode = kLightConst;
+        light_recount(g);
+        poke<uint8_t>(manager, 0x40, 1);   // Chroma sets the manager's changed flag too
+    }
+}
+static void* g_clock_class = NULL;
+static bool clock_ok(void* clock) {
+    static const FieldSpec fields[] = {{"_songTime", 0x84}};
+    return clock && confirm(g_clock_class, g_api->object_get_class(clock), "AudioTimeSyncController", fields, 1);
 }
 
 // ── stage 3.0 diagnostic (log only; never changes a colour) ─────────────────
@@ -520,6 +784,21 @@ static void diagnostic_register_hook(void* self, void* light, const void* method
     char line[192]; ++g_diag_lights;
     snprintf(line, sizeof(line), "[CHROMA DIAG] light group=%d position=%d class=%s", group, position, name ? name : "?");
     say(line);
+}
+
+// ── environment dump (stage 5.0, diagnostic) ────────────────────────────────
+static void time_update_hook(void* self, const void* method) {
+    Detour_Stub(&g_env_detour, void (*)(void*, const void*), self, method);
+    if (g_lights_level && g_session.active && !g_broken) {   // the first clock after the level load is this level's
+        if (g_clock_pending) { g_level_clock = self; g_clock_pending = false; }
+        if (self == g_level_clock && clock_ok(self)) lights_tick(peek<float>(self, 0x84));
+    }
+    if (g_env_frames < 0) return;
+    ++g_env_frames;
+    // Only levels with a sidecar (session) change the scene; GradientBackground goes for every one, like Chroma.
+    if (g_env_frames == kEnvApplyFrame && g_session.active && !g_broken) chroma_env_apply(g_env_host, g_session.chart);
+    if (g_env_frames == kEnvDumpFrame && g_env_dump) chroma_env_dump(g_env_host, kEnvDumpFolder);
+    if (g_env_frames >= kEnvDumpFrame) g_env_frames = -1;   // once per level, whatever the outcome
 }
 
 // ── install ─────────────────────────────────────────────────────────────────
@@ -584,6 +863,33 @@ bool chroma_install(const ChromaHost& host) {
     g_effects = effects;
     g_gradients = !g_diagnostic && code_matches(host.base, kAddTween);
     if (!g_diagnostic && !g_gradients) say("[CHROMA] tween fingerprint differs; light gradients off");
+    int env_flag = sceKernelOpen(kEnvDumpFlag, O_RDONLY, 0);
+    g_env_dump = env_flag >= 0; if (env_flag >= 0) sceKernelClose(env_flag);
+    if (!g_diagnostic) {
+        g_env_host.api = host.api; g_env_host.classes = host.classes; g_env_host.log = host.log;
+        if (!host.classes || !code_matches(host.base, kTimeUpdate)) say("[CHROMA ENV] time-sync fingerprint differs or no class lookup; environment unchanged");
+        else {
+            Detour_Construct(&g_env_detour, DetourMode_x64);
+            g_env_hooked = Detour_DetourFunction(&g_env_detour, host.base + kTimeUpdate.rva, (void*)time_update_hook) != NULL;
+            say(!g_env_hooked ? "[CHROMA ENV] time-sync hook failed; environment unchanged"
+                : g_env_dump ? "[CHROMA ENV] environment armed (2 frames after load) and dump armed (60 frames, one file per level)"
+                             : "[CHROMA ENV] environment armed: applied 2 frames after the load of a level with a sidecar; NOT hardware verification");
+        }
+        // Stage 3b: needs the clock (own lights' fades), SetColorForId, RegisterLight and Interpolate.
+        if (g_env_hooked && code_matches(host.base, kSetColor) && code_matches(host.base, kInterpolate)) {
+            g_ease = (LightEase)(host.base + kInterpolate.rva);
+            // The SDK stub would copy a RIP-relative CMP; the original is reached through our relocated prefix.
+            const uintptr_t set_color = host.base + kSetColor.rva;
+            if (chroma_set_color_trampoline((const unsigned char*)set_color, set_color, g_page + 192, 64)) {
+                Detour_Construct(&g_set_color_detour, DetourMode_x64);
+                g_set_color_hooked = Detour_DetourFunction(&g_set_color_detour, set_color, (void*)set_color_hook) != NULL;
+            }
+            g_lights = g_set_color_hooked && hook(kRegister, host.base, (void*)lights_register_hook);
+            if (!g_lights && g_set_color_hooked) { Detour_RestoreFunction(&g_set_color_detour); g_set_color_hooked = false; }
+            say(g_lights ? "[CHROMA] lightID armed: per-light colours for maps whose sidecar carries light indices; NOT hardware verification"
+                         : "[CHROMA] lightID hooks failed and were restored; lights colour whole groups");
+        } else say("[CHROMA] lightID fingerprints differ or no clock; lights colour whole groups");
+    }
     g_installed = true;
     say(g_diagnostic ? "[CHROMA DIAG] diagnostic mode: logging light registration and events; colours unchanged"
                      : g_effects ? (g_gradients ? "[CHROMA] hooks armed: colours, rings, lasers, light gradients; gradients NOT hardware verification"
@@ -594,7 +900,10 @@ bool chroma_install(const ChromaHost& host) {
 void chroma_uninstall() {
     if (!g_installed) return;
     report_effects();
-    unhook_all(); g_session.end(free); g_installed = false; g_gradients = false;
+    unhook_all(); g_session.end(chroma_release); g_installed = false; g_gradients = false;
+    if (g_set_color_hooked) { Detour_RestoreFunction(&g_set_color_detour); g_set_color_hooked = false; }
+    g_lights = g_lights_level = false; g_group_count = 0;
+    if (g_env_hooked) { Detour_RestoreFunction(&g_env_detour); g_env_hooked = false; g_env_frames = -1; }
     // The page stays mapped: a game thread may still be inside a relocated entry.
 }
 } // namespace BsdAdditive

@@ -1,3 +1,35 @@
+## 0.7.46 — left-out charts are named, unreleased
+
+- Search: Lightshow, Legacy and Lawless charts no longer mark a pack “Not
+  compatible”; the badge text says they will not be installed. A pack with
+  only such charts stays “Not compatible” (a mod-free Lawless set is still
+  offered as the experimental mod-free part).
+- After an installation, the status line lists the charts that were not
+  installed instead of the last raw log line.
+- Search: a map flagged Chroma is no longer “Not compatible” when the
+  installed plugin declares a Chroma level (`/api/orbis/plugin` → `chroma`);
+  it shows “Needs validation”, and the downloaded archive is checked key by
+  key. Without such a plugin Chroma still blocks.
+- The mod-free part of a mod pack is labelled “Experimental” (yellow, like
+  “Needs validation”) and goes to the queue with the plain “Add to queue”
+  button, without the extra confirmation dialog; the request still carries
+  the explicit `vanilla_subset` flag.
+
+## 0.7.45 — Chroma level 6, unreleased
+
+- Plugin setup records `chroma: 6` for a plugin with `ORB_CHROMA_V6`
+  (per-light `lightID`); Chroma maps stay installable with levels 1 to 6.
+
+## 0.7.44 — Chroma level 5, unreleased
+
+- Plugin setup records `chroma: 5` for a plugin with `ORB_CHROMA_V5`
+  (environment copies); Chroma maps stay installable with levels 1 to 5.
+
+## 0.7.43 — Chroma level 4, unreleased
+
+- Plugin setup records `chroma: 4` for a plugin with `ORB_CHROMA_V4` (static
+  environment); Chroma maps stay installable with levels 1 to 4.
+
 ## 0.7.42 — Chroma level 3, unreleased
 
 - Plugin setup records `chroma: 3` for a plugin with `ORB_CHROMA_V3` (light

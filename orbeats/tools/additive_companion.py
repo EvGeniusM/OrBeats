@@ -185,7 +185,11 @@ def download(map_id, destination, vanilla_subset=False, chroma=False):
     version = versions[0]
     # Opt-in vanilla subset: the pack-level refusal is deferred to the per-
     # difficulty selection and the unchanged strict importer. Default: refuse.
+    from additive_modes import SKIPPED
+
     for d in [] if vanilla_subset else version.get("diffs", []):
+        if d.get("characteristic") in SKIPPED:
+            continue  # left out by the importer and reported; its mods never reach the console
         # Level-1 Chroma is decided later by the importer from the keys actually used; the
         # flag alone no longer refuses a map when the plugin declared ORB_CHROMA_V1.
         blocked = [label for key, label in (("ne", "Noodle Extensions"), ("me", "Mapping Extensions"), ("chroma", "Chroma"))
@@ -323,7 +327,7 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
             template_seed = checked_bundle(ftp, songs[0])
         with tempfile.TemporaryDirectory(prefix="bsd-additive-") as tmp:
             tmp = Path(tmp)
-            source = Path(song_dir).resolve() if song_dir else download(map_id, tmp / "download", vanilla_subset, chroma=cap.get("chroma") in (1, 2, 3))
+            source = Path(song_dir).resolve() if song_dir else download(map_id, tmp / "download", vanilla_subset, chroma=cap.get("chroma") in (1, 2, 3, 4, 5, 6))
             # Leaderboard identity is the ORIGINAL pack's hash, and only when no
             # chart was renamed; a subset never invents or borrows an identity.
             identity_source, subset_report, publish_identity = None, None, True
@@ -349,13 +353,14 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
             print("[additive] Validating and converting map/audio...", flush=True)
             normalized = tmp / "normalized"
             # Chroma data is extracted only up to the level the active plugin declared:
-            # 1 = colours (ORB_CHROMA_V1), 2 = + rings and lasers (ORB_CHROMA_V2), 3 = + light gradients (ORB_CHROMA_V3).
-            import_report = importer.import_song(source, normalized, **({"chroma": cap["chroma"]} if cap.get("chroma") in (1, 2, 3) else {}))
+            # 1 = colours (ORB_CHROMA_V1), 2 = + rings and lasers (ORB_CHROMA_V2), 3 = + light gradients (ORB_CHROMA_V3), 4 = + environment (ORB_CHROMA_V4), 5 = + environment copies (ORB_CHROMA_V5), 6 = + per-light lightID (ORB_CHROMA_V6).
+            import_report = importer.import_song(source, normalized, **({"chroma": cap["chroma"]} if cap.get("chroma") in (1, 2, 3, 4, 5, 6) else {}))
             for difficulty, count in import_report.get("ignored_v2_wall_placeholders", {}).items():
                 print(f"[additive] Ignored {count} all-zero legacy wall placeholders in {difficulty}; playable walls retained.", flush=True)
             for difficulty, speed in import_report.get("default_njs", {}).items():
                 print(f"[additive] Using native default note jump speed: {difficulty} {speed}.", flush=True)
-            for skipped in import_report.get("skipped_difficulties", []):
+            not_installed = list(import_report.get("skipped_difficulties", []))
+            for skipped in not_installed:
                 print("[additive] Not installed: " + skipped, flush=True)
             template = tmp / "template.bundle"
             seed = template_seed if songs else read(ftp, BASE + "/template.bundle", 200000001, missing=True)
@@ -512,6 +517,8 @@ def install(config, map_id="", song_dir="", report_dir=None, vanilla_subset=Fals
                 "plugin_changed": False,
                 "limitations": "Validated vanilla V2/V3/V4, native arcs/chains/NJS and lighting, stock environments and supported characteristics; runtime extensions require OrBeats 0.8075. Mod-required effects are refused, not stripped.",
             }
+            if not_installed:
+                result["not_installed"] = not_installed
             if subset_report and subset_report["changed"]:
                 result["vanilla_subset"] = subset_report
                 result["limitations"] += " Vanilla subset was requested: only the listed mod-free charts were installed, unchanged; mod-dependent charts were left out."

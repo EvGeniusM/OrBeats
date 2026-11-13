@@ -147,7 +147,7 @@ static void refuses() {
     // A flipped byte inside a record with a recomputed digest must not crash.
     for (size_t i = kFirstEvent; i < payload.size(); ++i) { p = payload; p[i] ^= 0x80; ChromaChart c; ChromaDecode r = decode(seal(p), c); if (r == ChromaLoaded) chroma_free(c, released); assert(live == 0); }
     // Every allocation failure releases what was already taken.
-    for (int k = 0; k < 5; ++k) { calls = 0; fail_at = k; assert(decode(file, chart) == ChromaInvalid && zeroed(chart) && live == 0); }
+    for (int k = 0; k < 7; ++k) { calls = 0; fail_at = k; assert(decode(file, chart) == ChromaInvalid && zeroed(chart) && live == 0); }
     fail_at = -1;
     std::vector<unsigned char> huge(kChromaMaxBytes + 1, 0); memcpy(huge.data(), "BSDACHR1", 8);
     assert(chroma_decode(huge.data(), huge.size(), kId, 0, 3, chart, counted, released) == ChromaInvalid);
@@ -236,7 +236,7 @@ static void v2() {
     for (size_t n = 0; n < file.size(); ++n) { ChromaChart t; assert(chroma_decode(file.data(), n, kId, 0, 3, t, counted, released) == ChromaInvalid && zeroed(t)); }
     Bytes payload = chart2(ok);
     for (size_t i = kFirstEvent; i < payload.size(); ++i) { Bytes q = payload; q[i] ^= 0x80; ChromaChart t; if (decode(seal(q, '2'), t) == ChromaLoaded) chroma_free(t, released); assert(live == 0); }
-    for (int k = 0; k < 5; ++k) { calls = 0; fail_at = k; ChromaChart t; assert(decode(file, t) == ChromaInvalid && zeroed(t) && live == 0); }
+    for (int k = 0; k < 7; ++k) { calls = 0; fail_at = k; ChromaChart t; assert(decode(file, t) == ChromaInvalid && zeroed(t) && live == 0); }
     fail_at = -1;
     Bytes v3 = file; v3[7] = '3'; assert(decode(v3, c) == ChromaInvalid);
 }
@@ -274,10 +274,116 @@ static void reference_v2(const char* path) {
     assert(e && e->flags == (kChromaColor | kChromaLock | kChromaSpeed | kChromaDirection) && e->speed == 7.25f && e->direction == 0 && rgba(e->rgba, 1, 0, 0, 1));
     chroma_free(c, released);
 }
+// BSDACHR3: v2 events plus an environment block per chart.
+static void env_entry(Bytes& b, unsigned method, const char* id, unsigned fields, const std::vector<float>& values) {
+    u8(b, method); u16(b, (unsigned)strlen(id)); b.insert(b.end(), id, id + strlen(id)); u8(b, fields);
+    for (size_t i = 0; i < values.size(); ++i) real(b, values[i]);
+}
+static Bytes env_chart(const char* name, unsigned entries, void (*body)(Bytes&)) {
+    Bytes p; header(p, 1); u8(p, 0); u8(p, 3); u32(p, 0); u32(p, 0); u32(p, 0);
+    u8(p, (unsigned)strlen(name)); p.insert(p.end(), name, name + strlen(name)); u32(p, entries); if (body) body(p);
+    return p;
+}
+static void three(Bytes& p) {
+    env_entry(p, kEnvContains, "Tentacle", kEnvHasActive, std::vector<float>());
+    float sp[] = {2, 1, 2, -13, 10, 100}; env_entry(p, kEnvRegex, "\\[[0-9]+\\]FrontLights\\.\\[0\\]NeonTube$", kEnvScale | kEnvPosition, std::vector<float>(sp, sp + 6));
+    float lr[] = {0, 90, 0}; env_entry(p, kEnvEndsWith, "Ring(Clone)", kEnvHasActive | kEnvActive | kEnvLocalRotation, std::vector<float>(lr, lr + 3));
+}
+static void bad_regex(Bytes& p) { env_entry(p, kEnvRegex, "(a*)*", kEnvHasActive, std::vector<float>()); }
+static void bad_method(Bytes& p) { env_entry(p, 5, "x", kEnvHasActive, std::vector<float>()); }
+static void no_fields(Bytes& p) { env_entry(p, kEnvExact, "x", 0, std::vector<float>()); }
+static void high_field(Bytes& p) { env_entry(p, kEnvExact, "x", 128, std::vector<float>()); }
+static void lonely_active(Bytes& p) { env_entry(p, kEnvExact, "x", kEnvActive, std::vector<float>()); }
+static void empty_id(Bytes& p) { env_entry(p, kEnvExact, "", kEnvHasActive, std::vector<float>()); }
+static void control_id(Bytes& p) { env_entry(p, kEnvExact, "a\tb", kEnvHasActive, std::vector<float>()); }
+static void nan_value(Bytes& p) { float v[] = {NAN, 0, 0}; env_entry(p, kEnvExact, "x", kEnvScale, std::vector<float>(v, v + 3)); }
+static void huge_value(Bytes& p) { float v[] = {0, 200000, 0}; env_entry(p, kEnvExact, "x", kEnvPosition, std::vector<float>(v, v + 3)); }
+static void short_value(Bytes& p) { env_entry(p, kEnvExact, "x", kEnvScale, std::vector<float>(2, 1.0f)); }
+static void v3() {
+    ChromaChart c; Bytes file = seal(env_chart("KDAEnvironment", 3, three), '3');
+    assert(decode(file, c) == ChromaLoaded && !strcmp(c.env_name, "KDAEnvironment") && c.env_count == 3 && c.event_count == 0);
+    const ChromaEnvEntry& a = c.env[0];
+    assert(a.method == kEnvContains && a.fields == kEnvHasActive && a.id_len == 8 && !memcmp(c.env_ids + a.id_at, "Tentacle", 8));
+    const ChromaEnvEntry& b = c.env[1];
+    assert(b.method == kEnvRegex && b.scale[0] == 2 && b.scale[1] == 1 && b.position[0] == -13 && b.position[2] == 100 && b.local_position[0] == 0);
+    const ChromaEnvEntry& r = c.env[2];
+    assert(r.fields == (kEnvHasActive | kEnvActive | kEnvLocalRotation) && r.local_rotation[1] == 90 && !memcmp(c.env_ids + r.id_at, "Ring(Clone)", 11));
+    assert(c.env_id_bytes == 8 + strlen("\\[[0-9]+\\]FrontLights\\.\\[0\\]NeonTube$") + 11);
+    chroma_free(c, released); assert(live == 0);
+    // A chart without a block: name "" and no entries.
+    assert(decode(seal(env_chart("", 0, NULL), '3'), c) == ChromaLoaded && !c.env_name[0] && !c.env_count); chroma_free(c, released);
+    // The same payload under BSDACHR2 has trailing bytes.
+    ChromaChart z;
+    assert(decode(seal(env_chart("KDAEnvironment", 3, three), '2'), z) == ChromaInvalid);
+    void (*bodies[])(Bytes&) = {bad_regex, bad_method, no_fields, high_field, lonely_active, empty_id, control_id, nan_value, huge_value, short_value};
+    for (size_t i = 0; i < sizeof(bodies) / sizeof(bodies[0]); ++i) {
+        int before = live;
+        if (decode(seal(env_chart("E", 1, bodies[i]), '3'), z) != ChromaInvalid) { fprintf(stderr, "accepted env body %u\n", (unsigned)i); abort(); }
+        assert(zeroed(z) && live == before);
+    }
+    assert(decode(seal(env_chart("", 1, three), '3'), z) == ChromaInvalid);                 // entries without a name
+    assert(decode(seal(env_chart("KDAEnvironment", 0, NULL), '3'), z) == ChromaInvalid);    // a name without entries
+    assert(decode(seal(env_chart("KDAEnvironment", 4, three), '3'), z) == ChromaInvalid);   // count beyond the data
+    assert(decode(seal(env_chart("KDA\x01", 3, three), '3'), z) == ChromaInvalid);
+    Bytes tail = env_chart("KDAEnvironment", 3, three); u8(tail, 0); assert(decode(seal(tail, '3'), z) == ChromaInvalid);
+    for (int k = 0; k < 7; ++k) { calls = 0; fail_at = k; assert(decode(file, z) == ChromaInvalid && zeroed(z) && live == 0); }
+    fail_at = -1;
+}
+// The level-4 reference written by tests/chroma_reference.py::reference_sidecar_v3.
+static void reference_v3(const char* path) {
+    FILE* f = fopen(path, "rb"); assert(f); Bytes file(1 << 16); size_t n = fread(file.data(), 1, file.size(), f); fclose(f); assert(n && n < file.size()); file.resize(n);
+    ChromaChart c; assert(decode(file, c) == ChromaLoaded && c.event_count == 1 && !strcmp(c.env_name, "FitBeatEnvironment") && c.env_count == 2);
+    const ChromaEvent* e = chroma_find_event(c, 4, 1); assert(e && e->flags == kChromaColor && rgba(e->rgba, 0, 1, 0, 1));
+    const char spectro[] = "Spectrograms\\.\\[0\\]Spectrogram1$";
+    assert(c.env[0].method == kEnvRegex && c.env[0].fields == kEnvHasActive && c.env[0].id_len == strlen(spectro) && !memcmp(c.env_ids, spectro, strlen(spectro)));
+    const ChromaEnvEntry& t = c.env[1];
+    assert(t.method == kEnvContains && t.fields == (kEnvScale | kEnvPosition | kEnvRotation) && fabsf(t.position[1] - 4.2f) < 1e-5f && t.rotation[2] == 90 && t.scale[0] == 1.5f);
+    chroma_free(c, released);
+    assert(decode(file, c, 0, 4) == ChromaNoChart);
+    assert(decode(file, c, 0, 0) == ChromaLoaded && !c.env_count && !c.env_name[0]); chroma_free(c, released);   // Easy: no block
+}
+// BSDACHR4: kEnvDuplicate is followed by the copy count (1..100) before the vectors.
+static void copies(Bytes& p) {
+    u8(p, kEnvRegex); const char* id = "NeonTube$"; u16(p, (unsigned)strlen(id)); p.insert(p.end(), id, id + strlen(id));
+    u8(p, kEnvDuplicate); u8(p, 10);
+    u8(p, kEnvExact); u16(p, 1); p.push_back('x'); u8(p, kEnvDuplicate | kEnvScale); u8(p, 100); real(p, 2); real(p, 1); real(p, 2);
+}
+static void copy_count(Bytes& p, unsigned count) { u8(p, kEnvExact); u16(p, 1); p.push_back('x'); u8(p, kEnvDuplicate); u8(p, count); }
+static void zero_copies(Bytes& p) { copy_count(p, 0); }
+static void many_copies(Bytes& p) { copy_count(p, 101); }
+static void v4() {
+    ChromaChart c; Bytes file = seal(env_chart("BigMirrorEnvironment", 2, copies), '4');
+    assert(decode(file, c) == ChromaLoaded && c.env_count == 2);
+    assert(c.env[0].fields == kEnvDuplicate && c.env[0].duplicate == 10 && c.env[0].scale[0] == 0);
+    assert(c.env[1].fields == (kEnvDuplicate | kEnvScale) && c.env[1].duplicate == 100 && c.env[1].scale[0] == 2 && c.env[1].scale[2] == 2);
+    chroma_free(c, released); assert(live == 0);
+    // A v3 entry has no copies; v4 still reads plain entries; the copy bit is v4 only.
+    assert(decode(seal(env_chart("KDAEnvironment", 3, three), '4'), c) == ChromaLoaded && c.env_count == 3 && !c.env[1].duplicate); chroma_free(c, released);
+    ChromaChart z;
+    assert(decode(seal(env_chart("BigMirrorEnvironment", 2, copies), '3'), z) == ChromaInvalid && zeroed(z));
+    assert(decode(seal(env_chart("E", 1, zero_copies), '4'), z) == ChromaInvalid && zeroed(z));
+    assert(decode(seal(env_chart("E", 1, many_copies), '4'), z) == ChromaInvalid && zeroed(z));
+    Bytes cut = env_chart("E", 1, many_copies); cut.pop_back(); assert(decode(seal(cut, '4'), z) == ChromaInvalid);   // count missing
+    Bytes five = file; five[7] = '5'; assert(decode(five, z) == ChromaInvalid);
+    for (int k = 0; k < 7; ++k) { calls = 0; fail_at = k; assert(decode(file, z) == ChromaInvalid && zeroed(z) && live == 0); }
+    fail_at = -1;
+}
+// The level-5 reference written by tests/chroma_reference.py::reference_sidecar_v4.
+static void reference_v4(const char* path) {
+    FILE* f = fopen(path, "rb"); assert(f); Bytes file(1 << 16); size_t n = fread(file.data(), 1, file.size(), f); fclose(f); assert(n && n < file.size()); file.resize(n);
+    ChromaChart c; assert(decode(file, c, 0, 4) == ChromaLoaded && !strcmp(c.env_name, "BigMirrorEnvironment") && c.env_count == 2 && !c.event_count);
+    const char neon[] = "\\[19\\]FrontLights\\.\\[0\\]NeonTube$";
+    assert(c.env[0].method == kEnvRegex && c.env[0].fields == kEnvDuplicate && c.env[0].duplicate == 10 && c.env[0].id_len == strlen(neon) && !memcmp(c.env_ids, neon, strlen(neon)));
+    const ChromaEnvEntry& t = c.env[1];
+    assert(t.method == kEnvExact && t.fields == (kEnvDuplicate | kEnvScale | kEnvPosition) && t.duplicate == 2 && t.scale[1] == 1 && fabsf(t.position[1] - 6.0f) < 1e-5f);
+    chroma_free(c, released);
+}
 int main(int argc, char** argv) {
-    accepts(); refuses(); v2(); assert(live == 0);
+    accepts(); refuses(); v2(); v3(); v4(); assert(live == 0);
     if (argc > 1) reference(argv[1]);
     if (argc > 2) reference_v2(argv[2]);
+    if (argc > 3) reference_v3(argv[3]);
+    if (argc > 4) reference_v4(argv[4]);
     puts("chroma sidecar decoder ok");
     return 0;
 }

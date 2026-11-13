@@ -65,6 +65,13 @@ def convert_map(data, bpm):
                   'lightTranslationEventBoxGroups', 'vfxEventBoxGroups'}
     known = supported | empty_only | {'customData', '_customData', '_fxEventsCollection',
                                       'basicEventTypesWithKeywords', 'useNormalEventsAsCompatibleEvents'}
+    # Info.dat difficulty fields some editors also copy into the chart (BeatSaver 3dbbe).
+    # The game reads them only from Info; in a chart they are inert and are dropped.
+    stray = {k for k in ('_beatmapColorSchemeIdx', '_environmentNameIdx') if k in data}
+    if any(type(data[k]) is not int or data[k] < 0 for k in stray):
+        raise ValueError('invalid copied Info index in V3 chart')
+    if stray:
+        data = {k: v for k, v in data.items() if k not in stray}
     unknown = sorted(set(data) - known)
     if unknown:
         raise ValueError('unsupported V3 fields: ' + ', '.join(unknown))
@@ -167,6 +174,7 @@ def cosmetic_only(custom, allowed, chroma_ok=False):
 
 
 def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
+    from additive_modes import SKIPPED as SKIPPED_MODES, skipped as skip_line
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists() or output.is_relative_to(source):
         raise ValueError('new output outside source required')
@@ -192,8 +200,9 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
     from additive_lighting import has_boxes
     # chroma: False, or the Chroma level the active plugin declared (True = 1, the
     # 0.8080 interface): 1 = colours (ORB_CHROMA_V1), 2 = + rings/lasers (ORB_CHROMA_V2),
-    # 3 = + light gradients (ORB_CHROMA_V3).
-    level = chroma if chroma in (2, 3) else 1
+    # 3 = + light gradients (ORB_CHROMA_V3), 4 = + static environment (ORB_CHROMA_V4),
+    # 5 = + environment copies `duplicate` (ORB_CHROMA_V5), 6 = + per-light `lightID` (ORB_CHROMA_V6).
+    level = chroma if chroma in (2, 3, 4, 5, 6) else 1
     chroma_ok = False
     if chroma:
         # A Chroma requirement is honored only when every installed chart uses
@@ -201,6 +210,8 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
         import additive_chroma
         chroma_ok = True
         for group in original.get('_difficultyBeatmapSets', []):
+            if group.get('_beatmapCharacteristicName') in SKIPPED_MODES:
+                continue  # left out below; its data never reaches the console
             for diff in group.get('_difficultyBeatmaps', []):
                 probe = json.loads(prepare.local_file(source, diff['_beatmapFilename']).read_text(encoding='utf-8-sig'))
                 if not (str(probe.get('_version', '')).startswith('2.') or str(probe.get('version', '')).startswith('3.')):
@@ -212,6 +223,8 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
     force_native_v3 = False
     preserve_v3 = False
     for group in original.get('_difficultyBeatmapSets', []):
+        if group.get('_beatmapCharacteristicName') in SKIPPED_MODES:
+            continue
         for diff in group.get('_difficultyBeatmaps', []):
             probe = json.loads(prepare.local_file(source, diff['_beatmapFilename']).read_text(encoding='utf-8-sig'))
             if str(probe.get('_version', '')).startswith('2.') and group.get('_beatmapCharacteristicName') in ('90Degree','360Degree') and any(e.get('_type') in (14,15) for e in probe.get('_events',[])):
@@ -223,13 +236,19 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.additive-v3-', dir=output.parent) as tmp:
         stage = Path(tmp) / 'input'; stage.mkdir()
-        seen, tempos, skipped, default_njs = set(), {}, [], {}
+        seen, tempos, default_njs = set(), {}, {}
+        skipped = list(original.get('_orbeatsSkipped', []))  # left out by the V4 normalizer
+        if len(skipped) > 25 or any(not isinstance(item, str) or len(item) > 120 for item in skipped):
+            raise ValueError('invalid left-out chart report')
         active_environments = {}
         ignored_placeholders = {}
         chroma_charts = []
         from additive_modes import key as map_key, MODES, DIFFS
         for g in original.get('_difficultyBeatmapSets', []):
             mode = g.get('_beatmapCharacteristicName')
+            if mode in SKIPPED_MODES:
+                skipped.extend(skip_line(mode, d.get('_difficulty')) for d in g.get('_difficultyBeatmaps', []))
+                continue
             map_key(mode, 'Easy')
             ds = []
             for d in g.get('_difficultyBeatmaps', []):
@@ -238,14 +257,34 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
                 if name in seen: raise ValueError('unknown/duplicate difficulty')
                 seen.add(name)
                 raw = json.loads(prepare.local_file(source, d['_beatmapFilename']).read_text(encoding='utf-8-sig'))
+                if isinstance(raw, dict) and not any(raw.get(k) for k in ('colorNotes', 'bombNotes', 'obstacles', 'sliders', 'burstSliders', '_notes', '_obstacles')):
+                    # Same outcome as the check after conversion, but before the native path
+                    # refuses an empty chart (BeatSaver 34aa3: a lights-only Easy next to chains).
+                    skipped.append(name + ' (lighting-only; no playable objects)')
+                    continue
                 records = None
+                from additive_lighting import NATIVE_ENVIRONMENTS, has_boxes
+                environment = original.get('_environmentName')
+                index = d.get('_environmentNameIdx')
+                if index is not None:
+                    names = original.get('_environmentNames', [])
+                    if type(index) is not int or not isinstance(names, list) or index < 0:
+                        raise ValueError('invalid lighting environment index')
+                    if names:
+                        if index >= len(names) or not isinstance(names[index], str):
+                            raise ValueError('invalid lighting environment index')
+                        environment = names[index]
+                    elif index != 0:
+                        raise ValueError('invalid lighting environment index')
+                    # Empty table + index0 uses the authored root environment.
                 try:
                     if chroma and (str(raw.get('_version', '')).startswith('2.') or str(raw.get('version', '')).startswith('3.')):
                         import additive_chroma
                         # Seconds come from the authored tempo map; the bundle only
                         # stores the same instants as baked beats or sample regions.
                         clock = Tempo(original['_beatsPerMinute'], raw.get('bpmEvents', []) if 'version' in raw else [])
-                        records = additive_chroma.extract(raw, clock.time, level)
+                        # Light indices follow Chroma's table of the scene the game really loads.
+                        records = additive_chroma.extract(raw, clock.time, level, environment if environment in NATIVE_ENVIRONMENTS else None)
                         raw = additive_chroma.strip(raw)
                     if str(raw.get('_version', '')).startswith('2.'):
                         normalization = {}
@@ -291,20 +330,6 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
                         normalized = convert_map(raw, original['_beatsPerMinute'])
                 except ValueError as exc:
                     raise ValueError(f"{name} ({d['_beatmapFilename']}): {exc}") from exc
-                from additive_lighting import NATIVE_ENVIRONMENTS, has_boxes
-                environment = original.get('_environmentName')
-                index = d.get('_environmentNameIdx')
-                if index is not None:
-                    names = original.get('_environmentNames', [])
-                    if type(index) is not int or not isinstance(names, list) or index < 0:
-                        raise ValueError('invalid lighting environment index')
-                    if names:
-                        if index >= len(names) or not isinstance(names[index], str):
-                            raise ValueError('invalid lighting environment index')
-                        environment = names[index]
-                    elif index != 0:
-                        raise ValueError('invalid lighting environment index')
-                    # Empty table + index0 uses the authored root environment.
                 if environment in NATIVE_ENVIRONMENTS:
                     info['_environmentName'] = environment
                 if ((bool(native_light.get('eventBoxGroups')) or has_boxes(native_light) or bool(native_light.get('vfxEventBoxGroups'))) if native else has_boxes(normalized)):
@@ -315,6 +340,13 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
                     skipped.append(name + ' (lighting-only; no playable objects)')
                     continue
                 active_environments[name] = environment
+                if records and records.get('environment'):
+                    # Chroma changes the map's own environment only (EnvironmentOverrideChecker);
+                    # the plugin compares this name with the loaded scene.
+                    if environment not in NATIVE_ENVIRONMENTS:
+                        raise ValueError(f"{name}: Chroma environment changes need an available PS4 stock environment; requested {environment}")
+                    info['_environmentName'] = environment
+                    records['environment'] = dict(name=environment, entries=records['environment'])
                 tempos[name] = raw.get('bpmEvents', [])
                 filename = name.replace('/', '-') + '.dat'; (stage / filename).write_bytes(prepare.canonical(normalized))
                 njs = prepare.resolve_note_jump_speed(name, d.get('_noteJumpMovementSpeed', 0))
@@ -334,7 +366,8 @@ def import_song(source, output, ffmpeg='ffmpeg', chroma=False):
             if ds:
                 info['_difficultyBeatmapSets'].append({'_beatmapCharacteristicName': mode, '_difficultyBeatmaps': ds})
         if not info['_difficultyBeatmapSets']:
-            raise ValueError('No playable Standard difficulties; lighting-only charts cannot be installed.')
+            raise ValueError('No playable Standard difficulties; lighting-only charts cannot be installed.'
+                             + (' Left out: ' + '; '.join(skipped) if skipped else ''))
         if info.get('_environmentName') and any(v != info['_environmentName'] for v in active_environments.values()):
             raise ValueError('mixed per-difficulty environments need independent routing; not supported yet')
         if not decoded_audio:

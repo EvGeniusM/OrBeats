@@ -20,6 +20,11 @@ struct ChromaSession {
         const ChromaEvent* e = chroma_find_event_at(chart, type, time, value);
         return e && (e->flags & kChromaColor) ? e->rgba : NULL;   // a v2 record may carry ring/laser data only
     }
+    // Stage 3b: the record of a live light event, claimed (`take`) or only looked at.
+    ChromaEvent* record(uint8_t type, float time, int32_t value, bool take) {
+        return active ? chroma_claim_event(chart, type, time, value, take) : NULL;
+    }
+    static const float* color_of(const ChromaEvent* e) { return e && (e->flags & kChromaColor) ? e->rgba : NULL; }
     const float* pick() {
         if (light.next_calls > 0) { --light.next_calls; return light.next; }
         return light.current;

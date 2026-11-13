@@ -52,4 +52,26 @@ inline bool chroma_load_trampoline(const unsigned char* code, uintptr_t address,
     *p++ = 0xff; *p++ = 0x25; memset(p, 0, 4); p += 4; memcpy(p, &next, 8); p += 8;
     return (size_t)(p - out) == kChromaLoadTrampoline;
 }
+// Relocated entry for LightWithIdManager.SetColorForId (stage 3b). The SDK copies
+// at least 14 bytes, which here ends inside a RIP-relative CMP. Accepted prefix only:
+//   55 | 48 89 E5 | 41 57 | 41 56 | 53 | 48 83 EC 28 | 80 3D d32 00   (20 bytes)
+// RAX is free at the entry (no argument lives there and the body writes it before
+// any read), so the CMP becomes movabs rax,flag; cmp byte [rax],0 with the same flags.
+static const size_t kChromaSetColorPrefix = 20, kChromaSetColorTrampoline = 40;
+inline bool chroma_set_color_trampoline(const unsigned char* code, uintptr_t address, unsigned char* out, size_t capacity) {
+    static const unsigned char head[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x48, 0x83, 0xec, 0x28, 0x80, 0x3d};
+    if (!code || !out || capacity < kChromaSetColorTrampoline || address > UINTPTR_MAX - 0x1000 || memcmp(code, head, sizeof(head)) || code[19] != 0)
+        return false;
+    int32_t displacement = 0; memcpy(&displacement, code + 15, 4);
+    const uintptr_t next = address + kChromaSetColorPrefix;
+    uintptr_t flag;
+    if (displacement >= 0) { if (next > UINTPTR_MAX - (uintptr_t)displacement) return false; flag = next + (uintptr_t)displacement; }
+    else { uintptr_t distance = (uintptr_t)(-(int64_t)displacement); if (next < distance) return false; flag = next - distance; }
+    unsigned char* p = out;
+    memcpy(p, code, 13); p += 13;                               // pushes and sub rsp,0x28
+    *p++ = 0x48; *p++ = 0xb8; memcpy(p, &flag, 8); p += 8;      // movabs rax,flag
+    *p++ = 0x80; *p++ = 0x38; *p++ = 0x00;                      // cmp byte [rax],0 (was RIP-relative)
+    *p++ = 0xff; *p++ = 0x25; memset(p, 0, 4); p += 4; memcpy(p, &next, 8); p += 8;
+    return (size_t)(p - out) == kChromaSetColorTrampoline;
+}
 } // namespace

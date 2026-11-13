@@ -811,8 +811,8 @@ th {
 .compatibility-likely { color: var(--text); background: var(--accent-soft); }
 .compatibility-unsupported { color: #a4342a; background: #fff0ee; }
 .compatibility-unknown { color: #77501b; background: #fff6db; }
-.compatibility-subset { color: #24567a; background: #e6f2fb; }
-[data-theme="dark"] .compatibility-subset { color: #a9d4f2; background: #1f3342; }
+.compatibility-subset { color: #77501b; background: #fff6db; }
+[data-theme="dark"] .compatibility-subset { color: #f0d28e; background: #3b321e; }
 [data-theme="dark"] .compatibility-unsupported { color: #ffb7ad; background: #422622; }
 [data-theme="dark"] .compatibility-unknown { color: #f0d28e; background: #3b321e; }
 #confirm-message { white-space: pre-line; overflow-wrap: anywhere; max-height: 45dvh; overflow-y: auto; }

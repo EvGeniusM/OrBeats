@@ -65,6 +65,16 @@ int main() {
     // The next level starts clean.
     s.begin(chart());
     assert(s.event_color(1, 1.0f, 1) && !s.light.current);
+    {   // Stage 3b: equal-time events are paired with records in order (one lamp each).
+        ChromaEvent* e = s.chart.events;
+        assert(s.record(1, 2.0f, 1, false) == &e[2] && s.record(1, 2.0f, 1, false) == &e[2] && !e[2].used);   // looking claims nothing
+        assert(s.record(1, 2.0f, 1, true) == &e[2] && e[2].used);
+        assert(s.record(1, 2.002f, 1, true) == &e[1] && e[1].used);   // no free record of that value: the first free one
+        assert(s.record(1, 2.0f, 1, true) == &e[2] && s.record(1, 2.0f, 5, false) == &e[1]);   // all claimed: plain lookup
+        assert(s.record(1, 1.0f, 3, true) == &e[0] && !s.record(1, 3.0f, 1, true) && !s.record(2, 2.0f, 1, true));
+        assert(ChromaSession::color_of(&e[0]) == e[0].rgba);
+        e[0].flags = 0; assert(!ChromaSession::color_of(&e[0]) && !ChromaSession::color_of(NULL)); e[0].flags = kChromaColor;
+    }
     {   // Seven-arc rainbow shape (HW1, BeatSaver 55a43): same head, one colour each, file order.
         ChromaNote arcs[4]; memset(arcs, 0, sizeof(arcs));
         for (int i = 0; i < 3; ++i) { arcs[i].time = 5.0f; arcs[i].x = 2; arcs[i].kind = 1; arcs[i].rgba[0] = 0.1f * (float)(i + 1); }

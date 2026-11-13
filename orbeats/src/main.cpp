@@ -30,8 +30,8 @@
 #include "additive_chroma_runtime.h"
 #include "orbeats_branding.h"
 
-#define PLUGIN_VERSION "v0.8086"
-__attribute__((used)) static const char kNativeMapsCapability[]="ORB_NATIVE_MAPS_V1 ORB_PRESENTATION_V1 ORB_MODES_V1 ORB_CHROMA_V1 ORB_CHROMA_V2 ORB_CHROMA_V3";
+#define PLUGIN_VERSION "v0.8093"
+__attribute__((used)) static const char kNativeMapsCapability[]="ORB_NATIVE_MAPS_V1 ORB_PRESENTATION_V1 ORB_MODES_V1 ORB_CHROMA_V1 ORB_CHROMA_V2 ORB_CHROMA_V3 ORB_CHROMA_V4 ORB_CHROMA_V5 ORB_CHROMA_V6";
 // Diagnostic build identity stays in logs, not in player notifications.
 #ifdef VERBOSE_LOG
 #define PLUGIN_VARIANT " DEBUG"
@@ -2049,7 +2049,7 @@ static void try_install_additive_hook(void) {
     log_write("[ADDITIVE] post-LoadAll hook armed; awaiting game-thread callback (not proof of registration)");
     // Chroma colours only ever apply to our own library levels. A refusal here
     // (unknown code bytes, no memory) leaves songs and every other hook as is.
-    BsdAdditive::ChromaHost chroma = {(uintptr_t)base, &g_additive_api, chroma_log};
+    BsdAdditive::ChromaHost chroma = {(uintptr_t)base, &g_additive_api, chroma_log, &g_palette_apis};
     BsdAdditive::chroma_install(chroma);
 }
 

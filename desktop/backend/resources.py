@@ -51,6 +51,8 @@ FILES = (
     "tools/build_pack_mode_bundles.py",
     "tools/additive_companion.py",
     "tools/additive_chroma.py",
+    "tools/additive_chroma_regex.py",
+    "tools/chroma_light_id_tables.json",
     "tools/score_source.py",
     "tools/additive_library.py",
     "tools/additive_limits.py",

@@ -50,3 +50,32 @@ def reference_sidecar_v2() -> bytes:
               speed=7.25, direction=0),
     ])
     return additive_chroma.encode(LEVEL_ID, [chart])
+
+
+def reference_sidecar_v3() -> bytes:
+    """Level 4: Standard/Expert keeps one coloured event (4,1) and changes FitBeatEnvironment:
+    Regex "Spectrograms\\.\\[0\\]Spectrogram1$" off; Contains "NeonTube" scale 1.5, V2 position
+    (0, 7, 0) lanes = (0, 4.2, 0) units, rotation z 90. Standard/Easy has no environment block."""
+    c = additive_chroma
+    entries = c.environment({"_version": "2.6.0", "_customData": {"_environment": [
+        {"_id": r"Spectrograms\.\[0\]Spectrogram1$", "_lookupMethod": "Regex", "_active": False},
+        {"_id": "NeonTube", "_lookupMethod": "Contains", "_scale": [1.5, 1.5, 1.5], "_position": [0, 7, 0], "_rotation": [0, 0, 90]},
+    ]}})
+    expert = dict(mode=0, difficulty=3, notes=[], walls=[], environment=dict(name="FitBeatEnvironment", entries=entries),
+                  events=[dict(type=4, index=1, time=1.0, value=1, rgba=[0.0, 1.0, 0.0, 1.0], lights=[], flags=c.FLAG_COLOR)])
+    easy = dict(mode=0, difficulty=0, notes=[], walls=[], events=[
+        dict(type=1, index=1, time=1.0, value=1, rgba=[1.0, 0.0, 0.0, 1.0], lights=[], flags=c.FLAG_COLOR)])
+    return additive_chroma.encode(LEVEL_ID, [easy, expert])
+
+
+def reference_sidecar_v4() -> bytes:
+    """Level 5: BigMirrorEnvironment, Standard/ExpertPlus. Entry 1 copies "[19]FrontLights.[0]NeonTube$"
+    ten times (Regex, duplicate 10, nothing else); entry 2 is Exact "x" with duplicate 2,
+    scale (2, 1, 2) and V2 position (0, 10, 0) lanes = (0, 6, 0) units."""
+    c = additive_chroma
+    entries = c.environment({"_version": "2.2.0", "_customData": {"_environment": [
+        {"_id": r"\[19\]FrontLights\.\[0\]NeonTube$", "_lookupMethod": "Regex", "_duplicate": 10},
+        {"_id": "x", "_lookupMethod": "Exact", "_duplicate": 2, "_scale": [2, 1, 2], "_position": [0, 10, 0]},
+    ]}}, level=5)
+    chart = dict(mode=0, difficulty=4, notes=[], walls=[], events=[], environment=dict(name="BigMirrorEnvironment", entries=entries))
+    return additive_chroma.encode(LEVEL_ID, [chart])

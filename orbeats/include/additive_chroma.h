@@ -1,13 +1,17 @@
 // Bounded Chroma sidecar ("BSDACHR1" colours, "BSDACHR2" colours + ring and
-// laser parameters + light gradients): explicit little-endian decode, no struct mapping,
+// laser parameters + light gradients, "BSDACHR3" = BSDACHR2 + a static
+// environment block per chart, "BSDACHR4" = BSDACHR3 + environment copies):
+// explicit little-endian decode, no struct mapping,
 // whole-file validation before any chart is exposed. No SDK/game dependency so
 // the exact production decoder runs under host sanitizers.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "additive_chroma_regex.h"
 namespace BsdAdditive {
-static const size_t kChromaMaxBytes = 8u << 20;
+// 16 MiB: 34aa3 KDA is 9.7 MiB (four identical 40k-event light shows); the plugin reads it at exact size.
+static const size_t kChromaMaxBytes = 16u << 20;
 static const uint32_t kChromaMaxItems = 200000, kChromaMaxCharts = 25, kChromaMaxLights = 1024;
 static const float kChromaTimeTolerance = 0.005f, kChromaMaxTime = 3600.0f, kChromaMaxColor = 16.0f;
 // Mappers use 10000 for "instant" and multipliers up to 1e5 (BeatSaver 1dcf4, 1b6c2).
@@ -28,13 +32,26 @@ struct ChromaEvent {
     uint16_t flags; int8_t direction; uint8_t name_len; uint32_t name_at;    // name: lower-case ASCII in ChromaChart::names
     float speed, step, prop, rotation, step_mult, prop_mult, speed_mult;  // unset values are 0; multipliers default to 1
     float gradient_from[4], gradient_to[4], gradient_seconds; uint8_t easing;   // kChromaGradient only; else 0
+    uint8_t used;   // claimed by a live light event this level (stage 3b); the decoder leaves 0
 };
+// Stage 5a environment entry; vectors are Unity units/degrees (V2 positions already scaled).
+static const uint32_t kChromaMaxEnvEntries = 2048; static const uint16_t kChromaMaxEnvId = 512; static const uint8_t kChromaMaxEnvName = 63;
+static const float kChromaMaxEnvValue = 100000.0f;
+enum ChromaEnvMethod { kEnvRegex, kEnvExact, kEnvContains, kEnvStartsWith, kEnvEndsWith, kEnvMethodCount };
+enum ChromaEnvField { kEnvHasActive = 1, kEnvActive = 2, kEnvScale = 4, kEnvPosition = 8, kEnvLocalPosition = 16, kEnvRotation = 32,
+                      kEnvLocalRotation = 64, kEnvDuplicate = 128, kEnvFieldMask = 127 };
+// v4: kEnvDuplicate is followed by the copy count (Chroma "duplicate"), 1..kChromaMaxDuplicate.
+static const uint8_t kChromaMaxDuplicate = 100;
+struct ChromaEnvEntry { uint8_t method, fields, duplicate; uint16_t id_len; uint32_t id_at; float scale[3], position[3], local_position[3], rotation[3], local_rotation[3]; };
 struct ChromaNote  { float time; float rgba[4]; uint8_t x, y, color_type, kind; uint8_t used; };   // used: claimed by a live spawn this level
 struct ChromaWall  { float time, duration; float rgba[4]; int8_t x, y; uint8_t w, h; uint8_t used; };   // x/y signed: decorative walls sit outside the lanes (x = -1, 4)
 struct ChromaChart {
     ChromaEvent* events; ChromaNote* notes; ChromaWall* walls; uint16_t* light_ids; char* names;
     uint32_t event_count, note_count, wall_count, light_id_count, name_bytes;
+    ChromaEnvEntry* env; char* env_ids; uint32_t env_count, env_id_bytes;   // ids: ChromaEnvEntry::id_at/id_len, not terminated
+    char env_name[kChromaMaxEnvName + 1];                                    // the map's environment scene; "" without a block
 };
+enum { kChromaCounts = 7 };   // events, notes, walls, light ids, name bytes, env entries, env id bytes
 enum ChromaDecode { ChromaLoaded, ChromaNoChart, ChromaInvalid };
 
 struct ChromaReader {
@@ -58,7 +75,34 @@ inline uint64_t chroma_fnv(const unsigned char* p, size_t n) {
 inline float chroma_param(ChromaReader& r, uint16_t flags, uint16_t flag, float low, float high) {
     float f = r.real(); if (!((flags & flag) ? (f >= low && f <= high) : f == 0.0f)) r.ok = false; return f;
 }
-inline bool chroma_walk_chart(ChromaReader& r, ChromaChart* fill, uint32_t counts[5], int version) {
+inline bool chroma_printable(const unsigned char* p, size_t n) { for (size_t i = 0; i < n; ++i) if (p[i] < 0x20 || p[i] > 0x7e) return false; return true; }
+// BSDACHR3 environment block. Every Regex id must compile in the plugin's subset.
+inline bool chroma_walk_env(ChromaReader& r, ChromaChart* fill, uint32_t& entries, uint32_t& id_total, int version) {
+    static ChromaRegex scratch;   // decoder runs on one thread (level load); 13 KiB kept off the stack
+    uint8_t name_len = r.u8(); if (!r.ok || name_len > kChromaMaxEnvName || name_len > r.n || !chroma_printable(r.p, name_len)) return false;
+    if (fill) { memcpy(fill->env_name, r.p, name_len); fill->env_name[name_len] = 0; }
+    r.p += name_len; r.n -= name_len;
+    entries = r.u32(); id_total = 0;
+    if (!r.ok || entries > kChromaMaxEnvEntries || (entries != 0) != (name_len != 0)) return false;
+    for (uint32_t i = 0; i < entries; ++i) {
+        ChromaEnvEntry e; memset(&e, 0, sizeof(e));
+        e.method = r.u8(); e.id_len = r.u16(); e.id_at = id_total;
+        if (!r.ok || e.method >= kEnvMethodCount || !e.id_len || e.id_len > kChromaMaxEnvId || e.id_len > r.n || !chroma_printable(r.p, e.id_len)) return false;
+        if (e.method == kEnvRegex && !chroma_regex_compile((const char*)r.p, e.id_len, scratch)) return false;
+        if (fill) memcpy(fill->env_ids + id_total, r.p, e.id_len);
+        r.p += e.id_len; r.n -= e.id_len; id_total += e.id_len;
+        e.fields = r.u8();
+        const uint8_t mask = version >= 4 ? (uint8_t)(kEnvFieldMask | kEnvDuplicate) : (uint8_t)kEnvFieldMask;
+        if (!r.ok || !e.fields || (e.fields & ~mask) || ((e.fields & kEnvActive) && !(e.fields & kEnvHasActive))) return false;
+        if (e.fields & kEnvDuplicate) { e.duplicate = r.u8(); if (!r.ok || !e.duplicate || e.duplicate > kChromaMaxDuplicate) return false; }
+        float* vectors[5] = {e.scale, e.position, e.local_position, e.rotation, e.local_rotation};
+        for (int v = 0; v < 5; ++v) if (e.fields & (kEnvScale << v)) for (int k = 0; k < 3; ++k) vectors[v][k] = r.real(-kChromaMaxEnvValue, kChromaMaxEnvValue);
+        if (!r.ok) return false;
+        if (fill) fill->env[i] = e;
+    }
+    return true;
+}
+inline bool chroma_walk_chart(ChromaReader& r, ChromaChart* fill, uint32_t counts[kChromaCounts], int version) {
     uint32_t events = r.u32(); if (!r.ok || events > kChromaMaxItems) return false;
     uint32_t light_total = 0, name_total = 0; uint8_t last_type = 0; uint32_t last_index = 0; float last_time = 0;
     for (uint32_t i = 0; i < events; ++i) {
@@ -68,7 +112,7 @@ inline bool chroma_walk_chart(ChromaReader& r, ChromaChart* fill, uint32_t count
         if (version == 1 || (e.flags & kChromaColor)) r.color(e.rgba);
         else for (int k = 0; k < 4; ++k) if (r.real() != 0.0f) r.ok = false;   // no colour: zeros
         e.step_mult = e.prop_mult = e.speed_mult = 1.0f;
-        if (version == 2) {
+        if (version >= 2) {
             e.direction = (int8_t)r.u8();
             if ((e.flags & kChromaDirection) ? (e.direction != 0 && e.direction != 1) : e.direction != 0) return false;
             e.speed = chroma_param(r, e.flags, kChromaSpeed, -kChromaMaxEffect, kChromaMaxEffect);
@@ -117,11 +161,12 @@ inline bool chroma_walk_chart(ChromaReader& r, ChromaChart* fill, uint32_t count
         if (!r.ok || v.time < last_time) return false;
         last_time = v.time; if (fill) fill->walls[i] = v;
     }
-    counts[0] = events; counts[1] = notes; counts[2] = walls; counts[3] = light_total; counts[4] = name_total;
+    counts[0] = events; counts[1] = notes; counts[2] = walls; counts[3] = light_total; counts[4] = name_total; counts[5] = counts[6] = 0;
+    if (version >= 3 && !chroma_walk_env(r, fill, counts[5], counts[6], version)) return false;
     return true;
 }
 inline void chroma_free(ChromaChart& chart, void (*release)(void*)) {
-    if (release) { release(chart.events); release(chart.notes); release(chart.walls); release(chart.light_ids); release(chart.names); }
+    if (release) { release(chart.events); release(chart.notes); release(chart.walls); release(chart.light_ids); release(chart.names); release(chart.env); release(chart.env_ids); }
     memset(&chart, 0, sizeof(chart));
 }
 // Validates the WHOLE file, then copies only the requested chart. `out` is
@@ -130,7 +175,7 @@ inline ChromaDecode chroma_decode(const unsigned char* bytes, size_t size, const
                                   ChromaChart& out, void* (*allocate)(size_t), void (*release)(void*)) {
     memset(&out, 0, sizeof(out));
     if (!bytes || !level_id || !allocate || !release || size < 20 || size > kChromaMaxBytes || memcmp(bytes, "BSDACHR", 7) ||
-        (bytes[7] != '1' && bytes[7] != '2')) return ChromaInvalid;
+        bytes[7] < '1' || bytes[7] > '4') return ChromaInvalid;
     const int version = bytes[7] - '0';
     ChromaReader r = {bytes + 8, size - 8, true};
     uint32_t length = r.u32(); uint64_t digest = r.u64();
@@ -140,12 +185,12 @@ inline ChromaDecode chroma_decode(const unsigned char* bytes, size_t size, const
     r.p += id_size; r.n -= id_size;
     uint32_t charts = r.u32(); if (!r.ok || !charts || charts > kChromaMaxCharts) return ChromaInvalid;
     bool seen[5][5]; memset(seen, 0, sizeof(seen));
-    ChromaReader chosen = {NULL, 0, false}; uint32_t chosen_counts[5] = {0, 0, 0, 0, 0};
+    ChromaReader chosen = {NULL, 0, false}; uint32_t chosen_counts[kChromaCounts] = {0, 0, 0, 0, 0, 0, 0};
     for (uint32_t c = 0; c < charts; ++c) {
         uint8_t m = r.u8(), d = r.u8();
         if (!r.ok || m > 4 || d > 4 || seen[m][d]) return ChromaInvalid;
         seen[m][d] = true;
-        ChromaReader start = r; uint32_t counts[5];
+        ChromaReader start = r; uint32_t counts[kChromaCounts];
         if (!chroma_walk_chart(r, NULL, counts, version)) return ChromaInvalid;
         if (m == mode && d == difficulty) { chosen = start; memcpy(chosen_counts, counts, sizeof(counts)); }
     }
@@ -157,11 +202,15 @@ inline ChromaDecode chroma_decode(const unsigned char* bytes, size_t size, const
     out.walls = (ChromaWall*)allocate(sizeof(ChromaWall) * ((size_t)chosen_counts[2] + 1));
     out.light_ids = (uint16_t*)allocate(sizeof(uint16_t) * ((size_t)chosen_counts[3] + 1));
     out.names = (char*)allocate((size_t)chosen_counts[4] + 1);
-    uint32_t counts[5];
-    if (!out.events || !out.notes || !out.walls || !out.light_ids || !out.names || !chroma_walk_chart(chosen, &out, counts, version)) {
+    out.env = (ChromaEnvEntry*)allocate(sizeof(ChromaEnvEntry) * ((size_t)chosen_counts[5] + 1));
+    out.env_ids = (char*)allocate((size_t)chosen_counts[6] + 1);
+    uint32_t counts[kChromaCounts];
+    if (!out.events || !out.notes || !out.walls || !out.light_ids || !out.names || !out.env || !out.env_ids ||
+        !chroma_walk_chart(chosen, &out, counts, version)) {
         chroma_free(out, release); return ChromaInvalid;
     }
     out.event_count = counts[0]; out.note_count = counts[1]; out.wall_count = counts[2]; out.light_id_count = counts[3]; out.name_bytes = counts[4];
+    out.env_count = counts[5]; out.env_id_bytes = counts[6];
     return ChromaLoaded;
 }
 inline bool chroma_near(float a, float b) { float d = a - b; return d >= -kChromaTimeTolerance && d <= kChromaTimeTolerance; }
@@ -195,6 +244,29 @@ inline const ChromaEvent* chroma_find_event_at(const ChromaChart& chart, uint8_t
         if (!first) first = &chart.events[i];
     }
     return first;
+}
+// Stage 3b: equal-time light events of one type (one per lamp in lightID maps)
+// are paired with records in order. The first record of the time window that is
+// not claimed yet, preferring the same value; when every record of the window is
+// claimed (a replayed event), the plain lookup above. `take` marks it claimed.
+inline ChromaEvent* chroma_claim_event(ChromaChart& chart, uint8_t type, float time, int32_t value, bool take) {
+    const ChromaEvent* found = chroma_find_event_at(chart, type, time, value);
+    if (!found) return NULL;
+    size_t i = 0;   // window start: the first record of this type in the window
+    { size_t low = 0, high = chart.event_count; const float floor = time - kChromaTimeTolerance;
+      while (low < high) { size_t mid = low + (high - low) / 2; const ChromaEvent& e = chart.events[mid];
+          if (e.type < type || (e.type == type && e.time < floor)) low = mid + 1; else high = mid; }
+      i = low; }
+    ChromaEvent* same = NULL; ChromaEvent* other = NULL;
+    for (; i < chart.event_count && chart.events[i].type == type && chart.events[i].time <= time + kChromaTimeTolerance; ++i) {
+        ChromaEvent& e = chart.events[i];
+        if (e.used) continue;
+        if (e.value == value) { same = &e; break; }
+        if (!other) other = &e;
+    }
+    ChromaEvent* pick = same ? same : other ? other : &chart.events[found - chart.events];
+    if (take) pick->used = 1;
+    return pick;
 }
 // First index whose time is >= time - tolerance (arrays are time-sorted).
 template <class T> inline size_t chroma_lower_time(const T* items, size_t count, float time) {

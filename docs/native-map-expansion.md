@@ -108,8 +108,46 @@ rotation events have their own native preservation path.
   not verified on PS4): V2 `_lightGradient` with Chroma's easings except
   `easeStep`, played by the game's own light `ColorTween`. Difference from PC:
   on flash/fade events the gradient replaces the fade. Easing/lerpType outside a
-  gradient (V3 transitions), HSV, `_propID` and environment enhancement remain
-  refused.
+  gradient (V3 transitions), HSV and `_propID` remain refused. Gradients ran on
+  PS4 with 0.8086 (279 on ed9d, no fallback).
+- Chroma level 4 (plugin 0.8088 / pipeline 0.5405, `ORB_CHROMA_V4`,
+  `BSDACHR3`; switching objects off ran on PS4 with 0.8088 on Monstercat and
+  Dragons, regex and transform entries not yet seen on hardware): static environment — `environment` /
+  `_environment` entries with `active`, `scale`, `position`/`localPosition`,
+  `rotation`/`localRotation`, found by Chroma's lookup methods (Regex inside a
+  checked ECMAScript subset). Applied once per level, two frames after the
+  load, only when the map's own stock environment is loaded; GradientBackground
+  is switched off for every Chroma map, as on PC. The PS4 2.04 hierarchy matched
+  the local maps on FitBeat, KDA and Monstercat (0.8087 dump). Differences from
+  PC: ring position/rotation and parametric-box scale/position are not moved
+  (the game rewrites them each frame; Chroma patches that), and a scene root's
+  index is its sibling index (0). `lightID`, `geometry`, `track`,
+  materials, other components and custom events remain refused.
+- Chroma level 5 (plugin 0.8089 / pipeline 0.5406 candidate, `ORB_CHROMA_V5`,
+  `BSDACHR4`, not verified on PS4): `duplicate` (1-100 copies) for objects made
+  only of light components; copies get the original's light manager and are
+  registered, later entries find them as `<name>(Clone)`. Other components
+  (spectrograms, rotating lasers, rings) are not copied: on PS4 the plugin has
+  no Zenject container to fill their injected fields. Unlocks FitBeat
+  (1dcf4/1dcf5/1dcf9) and BigMirror (2c327). The Chroma sidecar cap is 16 MiB.
+  Copies were seen on PS4 with 0.8091/0.8092 (see the hardware matrix).
+- Chroma level 6 (plugin 0.8093 / pipeline 0.5407 candidate, `ORB_CHROMA_V6`,
+  not verified on PS4): `lightID`/`_lightID` of light events of types 0-4
+  changes single lights. Ids go through Chroma's light-ID table of the chart's
+  stock environment (from Aeroluna/Heck, MIT); the plugin keeps Chroma's light
+  order (first registration, never removed). Lights an event does not select
+  keep their look, including a running fade. Before level 6 (and for other
+  types) such events colour the whole group. Differences from PC: lights keeping
+  their own look ignore a boost toggle until their next event; a type whose
+  per-light fade into a transition (4, 8, 12) would differ from the game's group
+  fade colours whole groups. The game's strobe filter merges equal-time events,
+  so lightID shows need the “All effects” setting (on PC as well). `_propID`
+  remains refused.
+- Left-out characteristics (pipeline 0.5408): `Lightshow` (no notes),
+  `Legacy` (older version of the map) and, for now, `Lawless` charts are left
+  out of an otherwise installable pack and named in the install report and in
+  the search badge. Lawless is deferred (planned as its own library entry).
+  Any other characteristic outside the five native ones still refuses the pack.
 - Opt-in exception (pipeline 0.5401, `--vanilla-subset` / “Add vanilla part”):
   when a pack ALSO contains difficulties with no declared requirements, only
   those are installed, unchanged, and everything left out is listed. A mod-free

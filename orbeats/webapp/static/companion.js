@@ -7,6 +7,8 @@ const escapeHTML = (v) =>
 				c
 			],
 	);
+// True once the plugin check found ORB_CHROMA_V1; only then may a Chroma flag stay installable.
+let chromaCapable = false;
 const state = {
 	page: 0,
 	maps: [],
@@ -218,36 +220,51 @@ function mapData(map) {
 // These flags can reveal blockers, not prove that an archive will convert.
 // Keep this aligned with the fail-closed whole-pack import policy.
 function compatibility(map) {
+	// Mirrors additive_modes.SKIPPED: charts left out of an otherwise installable pack.
+	const SKIPPED_CHARACTERISTICS = ["Lightshow", "Legacy", "Lawless"];
 	const diffs = map.versions?.[0]?.diffs;
 	if (!Array.isArray(diffs) || !diffs.length) return {status: "unknown", label: "Needs validation", reason: "Chart metadata is missing. The archive will be validated before installation."};
-	const reasons = new Set();
-	let incomplete = false, vanilla = 0;
+	const reasons = new Set(), leftOut = new Set();
+	let incomplete = false, vanilla = 0, chroma = false, installable = 0;
 	const mods = {ne: "Noodle Extensions", me: "Mapping Extensions", chroma: "Chroma", cinema: "Cinema"};
 	for (const d of diffs) {
 		if (!d || typeof d !== "object") { incomplete = true; continue; }
 		const blockers = new Set();
 		let partial = false;
-		if (d.characteristic && !["Standard", "OneSaber", "NoArrows", "90Degree", "360Degree"].includes(d.characteristic)) blockers.add(`${d.characteristic} charts are unsupported`);
+		// Left out by the importer (additive_modes.SKIPPED) and reported; never a reason to refuse the pack.
+		// A mod-free Lawless copy still counts for the explicit vanilla part, which installs it as Standard.
+		const skipped = SKIPPED_CHARACTERISTICS.includes(d.characteristic);
+		if (skipped) leftOut.add(`${d.characteristic} charts`);
+		else installable++;
+		if (d.characteristic && !skipped && !["Standard", "OneSaber", "NoArrows", "90Degree", "360Degree"].includes(d.characteristic)) blockers.add(`${d.characteristic} charts are unsupported`);
 		if (!d.characteristic || !["Easy", "Normal", "Hard", "Expert", "ExpertPlus"].includes(d.difficulty)) partial = true;
 		for (const [key, label] of Object.entries(mods)) {
-			if (d[key] === true) blockers.add(label);
+			if (d[key] === true && key === "chroma" && chromaCapable) { chroma = true; partial = true; }
+			else if (d[key] === true) blockers.add(label);
 			else if (d[key] !== false) partial = true;
 		}
 		// BeatSaver reports vivify as true or null; only true is a blocker.
 		if (d.vivify === true) blockers.add("Vivify");
 		if (Array.isArray(d.requirements) && d.requirements.length) blockers.add("Declared mod requirements");
 		// A mod-free chart, counting a mod-free Lawless copy, can be offered alone.
-		if (!partial && blockers.size === (d.characteristic === "Lawless" ? 1 : 0)) vanilla++;
+		if (skipped && d.characteristic !== "Lawless") continue;
+		if (!partial && !blockers.size) vanilla++;
+		if (skipped) continue;
 		for (const blocker of blockers) reasons.add(blocker);
 		if (partial) incomplete = true;
 	}
-	// Never the default: the whole pack is still refused unless the vanilla part is requested explicitly.
-	if (reasons.size && vanilla) return {status: "subset", label: "Vanilla part", reason: [...reasons].join("; ") + `. ${vanilla} mod-free chart${vanilla === 1 ? "" : "s"} can be installed alone on request; the other charts are left out and nothing is edited. A Lawless set is listed as Standard when no Standard chart remains. The archive is validated before installation.`};
+	const leftOutNote = leftOut.size ? ` Not installed: ${[...leftOut].join(", ")} (no notes, an older version, or Lawless, not supported yet).` : "";
+	// Nothing is installed by default; a mod-free Lawless set is still offered as the explicit vanilla part.
+	if (!installable && vanilla) reasons.add("Lawless charts are installed only as the vanilla part");
+	else if (!installable) return {status: "unsupported", label: "Not compatible", reason: "Only " + [...leftOut].join(", ") + "; nothing playable would be installed."};
+	// Experimental: installable, but only as the mod-free part. The request always carries the explicit vanilla_subset flag.
+	if (reasons.size && vanilla) return {status: "subset", label: "Experimental", reason: `Experimental: only the ${vanilla} mod-free chart${vanilla === 1 ? "" : "s"} will be installed, unchanged. Left out: ` + [...reasons].join("; ") + ". A Lawless set is listed as Standard when no Standard chart remains and then has no ScoreSaber leaderboard. The archive is validated before installation."};
 	if (reasons.size) return {status: "unsupported", label: "Not compatible", reason: [...reasons].join("; ") + ". OrBeats refuses the whole pack rather than stripping unsupported charts/effects."};
-	return incomplete ? {status: "unknown", label: "Needs validation", reason: "Some compatibility flags are missing. The archive will be validated before installation."} : {status: "likely", label: "No known blockers", reason: "Metadata check only, not a compatibility guarantee. Chart format, geometry, lighting and audio are validated from the downloaded archive before installation."};
+	if (incomplete && chroma) return {status: "unknown", label: "Needs validation", reason: "Uses Chroma. The installed plugin shows the supported Chroma effects; the downloaded archive is checked key by key and anything beyond that is refused before installation." + leftOutNote};
+	return incomplete ? {status: "unknown", label: "Needs validation", reason: "Some compatibility flags are missing. The archive will be validated before installation." + leftOutNote} : {status: "likely", label: "No known blockers", reason: "Metadata check only, not a compatibility guarantee. Chart format, geometry, lighting and audio are validated from the downloaded archive before installation." + leftOutNote};
 }
 function compatibilityBadge(map) {
-	const c = compatibility(map), icon = c.status === "unsupported" ? "✕" : c.status === "likely" ? "✓" : c.status === "subset" ? "◐" : "?";
+	const c = compatibility(map), icon = c.status === "unsupported" ? "✕" : c.status === "likely" ? "✓" : c.status === "subset" ? "!" : "?";
 	return `<span class="compatibility compatibility-${c.status}" title="${escapeHTML(c.reason)}">${icon} ${c.label}</span>`;
 }
 function votes(stats) {
@@ -261,7 +278,7 @@ function rating(stats) {
 function card(map, index) {
 	const { meta, v, stats, title, artist, mapper, diffs } = mapData(map);
 	const c = compatibility(map);
-	return `<article class="card">${artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<h3 title="${escapeHTML(title)}">${escapeHTML(title)}</h3><p class="artist">${escapeHTML(artist)}</p><p class="mapper">Mapped by ${escapeHTML(mapper)}</p><div class="meta"><span>◷ ${duration(meta.duration)}</span><span>♫ ${number(meta.bpm)} BPM</span>${rating(stats)}</div><div class="diffs">${diffBadges(diffs)}</div>${compatibilityBadge(map)}<div class="meta"><span title="${escapeHTML(map.uploaded || v.createdAt || "Upload time unavailable")}">${relativeDate(map.uploaded || v.createdAt)}</span></div><div class="card-bottom"><button data-detail="${index}">View details</button><button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" data-subset="${c.status === "subset"}" title="${escapeHTML(c.reason)}">${c.status === "subset" ? "Add vanilla part ＋" : "Add to queue ＋"}</button></div></article>`;
+	return `<article class="card">${artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<h3 title="${escapeHTML(title)}">${escapeHTML(title)}</h3><p class="artist">${escapeHTML(artist)}</p><p class="mapper">Mapped by ${escapeHTML(mapper)}</p><div class="meta"><span>◷ ${duration(meta.duration)}</span><span>♫ ${number(meta.bpm)} BPM</span>${rating(stats)}</div><div class="diffs">${diffBadges(diffs)}</div>${compatibilityBadge(map)}<div class="meta"><span title="${escapeHTML(map.uploaded || v.createdAt || "Upload time unavailable")}">${relativeDate(map.uploaded || v.createdAt)}</span></div><div class="card-bottom"><button data-detail="${index}">View details</button><button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" data-subset="${c.status === "subset"}" title="${escapeHTML(c.reason)}">Add to queue ＋</button></div></article>`;
 }
 async function search(reset = true) {
 	if (reset) state.page = 0;
@@ -300,7 +317,7 @@ function showDetails(index, installedId = null) {
 	const bool = (v) => (v ? "Yes" : "No");
 	const c = compatibility(map);
 	$("detail-content").innerHTML =
-		`<div class="detail-top">${installedId ? installedArtwork(title, installedId) : artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<div><span class="eyebrow">BEATSAVER ${escapeHTML(map.id)}</span><h2>${escapeHTML(title)}</h2><p>${escapeHTML(artist)}<br>Mapped by ${escapeHTML(mapper)}</p><div class="diffs">${diffBadges(diffs)}</div>${installedId ? `<button class="danger" data-remove="${escapeHTML(installedId)}">Remove from PS4</button>` : `<button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" data-subset="${c.status === "subset"}" title="${escapeHTML(c.reason)}">${c.status === "subset" ? "Add vanilla part ＋" : "Add to queue ＋"}</button>`}</div></div><div class="stats"><div><strong>${duration(meta.duration)}</strong><small>DURATION</small></div><div><strong>${number(meta.bpm)}</strong><small>BPM</small></div><div>${rating(stats)}<small>BEATSAVER SCORE</small></div><div><strong>${number(stats.upvotes)} / ${number(stats.downvotes)}</strong><small>UP / DOWN VOTES</small></div></div><p>${compatibilityBadge(map)}</p><p class="hint">${escapeHTML(c.reason)}</p><p title="${escapeHTML(map.uploaded || v.createdAt || "")}">Uploaded ${escapeHTML(relativeDate(map.uploaded || v.createdAt))}<br>Curated: ${bool(map.curatedAt)} · Ranked: ${bool(map.ranked || map.blRanked)} · Tags: ${escapeHTML((map.tags || []).join(", "))}</p><p class="description">${escapeHTML(map.description || "No mapper description supplied.")}</p><div class="table-wrap"><table><thead><tr><th>Chart</th><th>Notes / bombs / walls</th><th>NPS</th><th>NJS</th><th>Stars</th><th>Requirements</th></tr></thead><tbody>${diffs.map((d) => `<tr><td>${escapeHTML(d.characteristic)} ${escapeHTML(d.difficulty)}</td><td>${number(d.notes)} / ${number(d.bombs)} / ${number(d.obstacles)}</td><td>${number(d.nps)}</td><td>${number(d.njs)}</td><td>${number(d.stars || d.blStars)}</td><td>${escapeHTML([d.ne && "Noodle Extensions", d.me && "Mapping Extensions", d.chroma && "Chroma", d.cinema && "Cinema"].filter(Boolean).join(", ") || "Vanilla")}</td></tr>`).join("")}</tbody></table></div><p class="hint">Support: validated vanilla V2/V3/V4, arcs, chains, native V4 NJS/lighting, available stock environments, Standard, One Saber, No Arrows and 90°/360° characteristics. Expanded features require OrBeats 0.8075; hardware validation is pending. Mod-dependent effects remain unsupported. Unsupported formats and requirements are explicitly refused, not silently removed. Original maps are downloaded and converted in temporary storage, not kept as a local song library.</p><details><summary>Complete BeatSaver API data</summary><pre>${escapeHTML(JSON.stringify(map, null, 2))}</pre></details><p><a href="https://beatsaver.com/maps/${escapeHTML(map.id)}" target="_blank" rel="noopener noreferrer">Open on BeatSaver ↗</a></p>`;
+		`<div class="detail-top">${installedId ? installedArtwork(title, installedId) : artwork(title, imageURL(v.coverURL), mediaURL(v.previewURL))}<div><span class="eyebrow">BEATSAVER ${escapeHTML(map.id)}</span><h2>${escapeHTML(title)}</h2><p>${escapeHTML(artist)}<br>Mapped by ${escapeHTML(mapper)}</p><div class="diffs">${diffBadges(diffs)}</div>${installedId ? `<button class="danger" data-remove="${escapeHTML(installedId)}">Remove from PS4</button>` : `<button class="primary" data-install="${escapeHTML(map.id)}" data-unsupported="${c.status === "unsupported"}" data-subset="${c.status === "subset"}" title="${escapeHTML(c.reason)}">Add to queue ＋</button>`}</div></div><div class="stats"><div><strong>${duration(meta.duration)}</strong><small>DURATION</small></div><div><strong>${number(meta.bpm)}</strong><small>BPM</small></div><div>${rating(stats)}<small>BEATSAVER SCORE</small></div><div><strong>${number(stats.upvotes)} / ${number(stats.downvotes)}</strong><small>UP / DOWN VOTES</small></div></div><p>${compatibilityBadge(map)}</p><p class="hint">${escapeHTML(c.reason)}</p><p title="${escapeHTML(map.uploaded || v.createdAt || "")}">Uploaded ${escapeHTML(relativeDate(map.uploaded || v.createdAt))}<br>Curated: ${bool(map.curatedAt)} · Ranked: ${bool(map.ranked || map.blRanked)} · Tags: ${escapeHTML((map.tags || []).join(", "))}</p><p class="description">${escapeHTML(map.description || "No mapper description supplied.")}</p><div class="table-wrap"><table><thead><tr><th>Chart</th><th>Notes / bombs / walls</th><th>NPS</th><th>NJS</th><th>Stars</th><th>Requirements</th></tr></thead><tbody>${diffs.map((d) => `<tr><td>${escapeHTML(d.characteristic)} ${escapeHTML(d.difficulty)}</td><td>${number(d.notes)} / ${number(d.bombs)} / ${number(d.obstacles)}</td><td>${number(d.nps)}</td><td>${number(d.njs)}</td><td>${number(d.stars || d.blStars)}</td><td>${escapeHTML([d.ne && "Noodle Extensions", d.me && "Mapping Extensions", d.chroma && "Chroma", d.cinema && "Cinema"].filter(Boolean).join(", ") || "Vanilla")}</td></tr>`).join("")}</tbody></table></div><p class="hint">Support: validated vanilla V2/V3/V4, arcs, chains, native V4 NJS/lighting, available stock environments, Standard, One Saber, No Arrows and 90°/360° characteristics. Expanded features require OrBeats 0.8075; hardware validation is pending. Mod-dependent effects remain unsupported. Unsupported formats and requirements are explicitly refused, not silently removed. Original maps are downloaded and converted in temporary storage, not kept as a local song library.</p><details><summary>Complete BeatSaver API data</summary><pre>${escapeHTML(JSON.stringify(map, null, 2))}</pre></details><p><a href="https://beatsaver.com/maps/${escapeHTML(map.id)}" target="_blank" rel="noopener noreferrer">Open on BeatSaver ↗</a></p>`;
 	updateQueueButtons();
 	$("details").showModal();
 }
@@ -332,6 +349,10 @@ function setLogOpen(open) {
 	updateLogControls();
 	followLogTail();
 }
+// Charts the importer left out ("[additive] Not installed: ..."), in log order, without repeats.
+function notInstalled(log) {
+	return [...new Set([...String(log).matchAll(/\[additive\] Not installed: (.+)/g)].map(m => m[1].trim()))];
+}
 function logLines(lines) {
 	if (!lines.length) return;
 	state.rawLog += lines.join("\n") + "\n";
@@ -346,7 +367,7 @@ function updateQueueButtons() {
 	const queued = new Set([...state.queue.pending, ...(state.queue.active ? [state.queue.active] : [])].map(e => e.map_id));
 	for (const button of document.querySelectorAll("[data-install]")) {
 		button.disabled = button.dataset.unsupported === "true" || state.removing || queued.has(button.dataset.install) || state.adding.has(button.dataset.install);
-		button.textContent = queued.has(button.dataset.install) ? "Queued ✓" : button.dataset.unsupported === "true" ? "Not supported" : button.dataset.subset === "true" ? "Add vanilla part ＋" : "Add to queue ＋";
+		button.textContent = queued.has(button.dataset.install) ? "Queued ✓" : button.dataset.unsupported === "true" ? "Not supported" : "Add to queue ＋";
 	}
 	for (const button of document.querySelectorAll("[data-retry-map]")) {
 		const key = button.dataset.retryMap;
@@ -373,7 +394,7 @@ function renderQueue(queue) {
 	const signature = JSON.stringify([queue.pending, queue.history]);
 	if (state.queueSignature !== signature) {
 		state.queueSignature = signature;
-		$("queue-list").innerHTML = queue.pending.length ? queue.pending.map((entry, i) => `<li><span class="queue-number">${i + 1}</span><div><strong>${escapeHTML(entry.title)}</strong><small>BeatSaver ${escapeHTML(entry.map_id)}${entry.vanilla_subset === true ? " · Vanilla part" : ""} · Waiting</small></div><button data-queue-remove="${escapeHTML(entry.id)}" aria-label="Remove ${escapeHTML(entry.title)} from queue">×</button></li>`).join("") : '<li class="queue-empty">Your next beat starts in Discover.</li>';
+		$("queue-list").innerHTML = queue.pending.length ? queue.pending.map((entry, i) => `<li><span class="queue-number">${i + 1}</span><div><strong>${escapeHTML(entry.title)}</strong><small>BeatSaver ${escapeHTML(entry.map_id)}${entry.vanilla_subset === true ? " · Experimental: mod-free charts only" : ""} · Waiting</small></div><button data-queue-remove="${escapeHTML(entry.id)}" aria-label="Remove ${escapeHTML(entry.title)} from queue">×</button></li>`).join("") : '<li class="queue-empty">Your next beat starts in Discover.</li>';
 		$("queue-history").innerHTML = queue.history.length ? queue.history.map(entry => `<li><span class="queue-result ${escapeHTML(entry.status)}">${entry.status === "complete" ? "✓" : "!"}</span><div><strong>${escapeHTML(entry.title)}</strong><small>${escapeHTML(entry.status)}${entry.error ? ` · ${escapeHTML(entry.error)}` : ""}</small></div>${["failed", "cancelled"].includes(entry.status) ? `<button type="button" data-queue-retry="${escapeHTML(entry.id)}" data-retry-map="${escapeHTML(entry.map_id)}" aria-label="Retry ${escapeHTML(entry.title)}">Retry</button>` : ""}</li>`).join("") : '<li class="queue-empty">Completed installations will appear here.</li>';
 	}
 	updateQueueButtons();
@@ -384,8 +405,6 @@ async function install(key, retryTitle = null, subset = false) {
 	if (state.adding.has(key) || state.queue.pending.some(e => e.map_id === key) || state.queue.active?.map_id === key) return;
 	const map = state.maps.find(m => m.id === key) || (state.selected?.id === key ? state.selected : null);
 	const check = map ? compatibility(map) : null;
-	// Explicit opt-in per map. A retry repeats the choice already confirmed for that queue entry.
-	if (subset && retryTitle === null && !(await confirmAction("Install only the vanilla part?", (check ? check.reason + " " : "") + "The installed entry is not the complete map and has no ScoreSaber leaderboard when a Lawless set is used.", "Add vanilla part"))) return;
 	state.adding.add(key);
 	updateQueueButtons();
 	try {
@@ -438,6 +457,8 @@ async function pollActivity() {
 			$("progress").classList.toggle("complete", !progress.running && progress.job.exit_code === 0);
 			$("progress").classList.toggle("stopped", !progress.running && progress.job.exit_code !== 0);
 			$("progress").setAttribute("aria-valuetext", progress.running ? "Working; exact progress unavailable" : progress.job.exit_code === 0 ? "Installation complete" : "Installation stopped");
+			const leftOut = progress.running ? [] : notInstalled(state.rawLog);
+			if (leftOut.length) $("job-stage").textContent = "Not installed: " + leftOut.join("; ");
 		}
 		updateLogControls();
 		state.queueError = state.queueError === "Connection interrupted. Refresh or wait to reconnect; do not retry installations blindly." ? "" : state.queueError;
@@ -785,6 +806,7 @@ async function initialize() {
         target.textContent = "Checking the installed plugin binary…";
         try {
             const r = await api("/api/orbis/plugin");
+            chromaCapable = r.chroma === true;
             const installed = !r.installed ? "Not installed" : r.installed_version || "Unknown binary";
             const checks = r.capability_matches && r.declared_version_matches ? "Capability matches" : "Capability needs review";
             const registration = r.registration === "registered_once" ? "Registered once" : "Registration needs review";

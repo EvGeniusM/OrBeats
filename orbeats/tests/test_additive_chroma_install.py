@@ -123,7 +123,7 @@ def install_body():
 def test_install_wiring_publishes_before_library_and_undoes_on_failure():
     body = install_body()
     # Chroma extraction is requested only for a plugin that declared the marker.
-    assert 'cap.get("chroma") in (1, 2, 3)' in body and '{"chroma": cap["chroma"]}' in body
+    assert 'cap.get("chroma") in (1, 2, 3, 4, 5, 6)' in body and '{"chroma": cap["chroma"]}' in body
     assert body.count("additive_chroma.publish(") == 2
     new_song = body.index("chroma_created = additive_chroma.publish(")
     assert body.index("score_source.publish(ftp", body.index("metadata = source_metadata")) < new_song
@@ -135,13 +135,16 @@ def test_install_wiring_publishes_before_library_and_undoes_on_failure():
 
 def test_plugin_deployment_records_the_marker_in_the_capability_file():
     text = (ROOT / "webapp/library_manager.py").read_text(encoding="utf8")
-    assert '"chroma": 3 if b"ORB_CHROMA_V3" in canonical else 2 if b"ORB_CHROMA_V2" in canonical else 1 if b"ORB_CHROMA_V1" in canonical else 0' in text
+    assert '"chroma": 6 if b"ORB_CHROMA_V6" in canonical else 5 if b"ORB_CHROMA_V5" in canonical else 4 if b"ORB_CHROMA_V4" in canonical else 3 if b"ORB_CHROMA_V3" in canonical else 2 if b"ORB_CHROMA_V2" in canonical else 1 if b"ORB_CHROMA_V1" in canonical else 0' in text
 
 
 def test_desktop_bundle_ships_the_module():
     root = ROOT.parent / "desktop"
-    assert '"tools/additive_chroma.py"' in (root / "backend/resources.py").read_text(encoding="utf8")
-    assert '"additive_chroma"' in (root / "freeze_backend.py").read_text(encoding="utf8")
+    resources = (root / "backend/resources.py").read_text(encoding="utf8")
+    for name in ("additive_chroma.py", "additive_chroma_regex.py", "chroma_light_id_tables.json"):
+        assert f'"tools/{name}"' in resources
+    freeze = (root / "freeze_backend.py").read_text(encoding="utf8")
+    assert '"additive_chroma"' in freeze and '"additive_chroma_regex"' in freeze
 
 
 def test_search_label_lifts_chroma_only_for_a_capable_plugin():

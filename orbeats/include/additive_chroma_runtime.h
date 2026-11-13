@@ -5,10 +5,12 @@
 #pragma once
 #include "additive_song_packs.h"
 namespace BsdAdditive {
+struct PaletteApis;
 struct ChromaHost {
     uintptr_t base;                 // Il2CppUserAssemblies.prx image base
     const Api* api;                 // must outlive the plugin
     void (*log)(const char*);
+    const PaletteApis* classes;     // class lookup for the stage-5.0 environment dump; read when used
 };
 // Verifies every code fingerprint before changing anything. Returns false and
 // leaves the game untouched on any mismatch. Safe to call once.

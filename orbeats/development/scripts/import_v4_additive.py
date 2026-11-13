@@ -188,10 +188,25 @@ def normalize(source, output, local_file):
 
     validate_audio(audio_data)
     events = tempo_events({**audio_data, "songChecksum": "", "lufsData": []})
+    from additive_modes import SKIPPED, skipped as skip_line
+
+    all_diffs = info["difficultyBeatmaps"]
+    if not isinstance(all_diffs, list) or not 1 <= len(all_diffs) <= 25:
+        raise ValueError("one to twenty-five supported characteristic/difficulty entries required")
+    # Lightshow/Legacy/Lawless charts are left out before any check or conversion; the
+    # V3 importer reports them (`_orbeatsSkipped`) with its own skipped charts.
+    left_out = [
+        skip_line(d["characteristic"], d.get("difficulty"))
+        for d in all_diffs
+        if isinstance(d, dict) and d.get("characteristic") in SKIPPED
+    ]
+    diffs = [d for d in all_diffs if not (isinstance(d, dict) and d.get("characteristic") in SKIPPED)]
+    if not diffs:
+        raise ValueError("No playable charts; left out: " + "; ".join(left_out))
     native_mode = bool(audio_data.get("lufsData")) or any(
-        d.get("characteristic") in ("90Degree", "360Degree") for d in info["difficultyBeatmaps"]
+        d.get("characteristic") in ("90Degree", "360Degree") for d in diffs
     )
-    for item in info["difficultyBeatmaps"]:
+    for item in diffs:
         candidate = json.loads(local_file(source, item["beatmapDataFilename"]).read_text(encoding="utf-8-sig"))
         show = json.loads(local_file(source, item["lightshowDataFilename"]).read_text(encoding="utf-8-sig"))
         native_mode |= any(candidate.get(k) for k in ("arcs", "chains", "njsEvents")) or any(
@@ -218,9 +233,8 @@ def normalize(source, output, local_file):
         "_previewDuration": audio.get("previewDuration", 10),
         "_difficultyBeatmapSets": groups,
     }
-    diffs = info["difficultyBeatmaps"]
-    if not isinstance(diffs, list) or not 1 <= len(diffs) <= 25:
-        raise ValueError("one to twenty-five supported characteristic/difficulty entries required")
+    if left_out:
+        normalized["_orbeatsSkipped"] = left_out
     output.mkdir()  # never overwrite caller content
     authors = []
     seen = set()
